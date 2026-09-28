@@ -31,11 +31,18 @@
 
 #define PWM_DEV  DEVICE_DT_GET(DT_NODELABEL(gpt0_pwm))
 
+/* Derived from DT, so the expectation follows the node's `prescaler`.
+ */
+#define PWM_NODE       DT_NODELABEL(gpt0_pwm)
+#define PWM_PRESCALER  DT_PROP(PWM_NODE, prescaler)
+#define PWM_PCLK_HZ    DT_PROP_BY_PHANDLE(PWM_NODE, clocks, clock_frequency)
+
 /* Offsets from drivers/pwm/pwm_agm_gptimer.c. */
 #define GPT_CR1    0x00U
 #define GPT_CCMR0  0x18U
 #define GPT_CCMR1  0x1cU
 #define GPT_CCER   0x20U
+#define GPT_PSC    0x28U
 #define GPT_ARR    0x2cU
 #define GPT_CCR0   0x34U
 #define GPT_BDTR   0x44U
@@ -89,6 +96,10 @@ ZTEST(pwm_agm_gptimer, test_01_init_runs_the_counter_and_opens_the_outputs)
 		      "ARR preload + counter enable");
 	zassert_equal(reg_rd(GPT_BDTR) & BDTR_MOE, BDTR_MOE, "main output enable");
 
+	/* The driver has to program PSC from the node before the EGR.UG that
+	 * latches it; it used to be left at the reset value by omission. */
+	zassert_equal(reg_rd(GPT_PSC), PWM_PRESCALER, "PSC matches the node's prescaler");
+
 	/* The pinctrl state is applied at init: the four CH pins are AFSEL'd on
 	 * GPIO bank 1, with DIR left alone (NO_DIR -- the timer drives them). */
 	zassert_equal(*(volatile uint32_t *)(0x40014000UL + 0x1000UL + 0x420UL) & 0xfU, 0xfU,
@@ -100,7 +111,8 @@ ZTEST(pwm_agm_gptimer, test_02_cycles_per_sec_is_the_pclk)
 	uint64_t cycles = 0U;
 
 	zassert_ok(pwm_get_cycles_per_sec(PWM_DEV, 0U, &cycles));
-	zassert_equal(cycles, 200000000U, "the counter ticks at pclk (PSC is fixed at 0)");
+	zassert_equal(cycles, PWM_PCLK_HZ / (PWM_PRESCALER + 1U),
+		      "the counter ticks at pclk / (prescaler + 1)");
 
 	zassert_equal(pwm_get_cycles_per_sec(PWM_DEV, 4U, &cycles), -EINVAL,
 		      "channel 4 does not exist");
@@ -209,4 +221,29 @@ ZTEST(pwm_agm_gptimer, test_23_zero_period_disables_that_channel_only)
 	zassert_equal(reg_rd(GPT_CCER) & CCER_CCxE(1U), CCER_CCxE(1U),
 		      "channel 1 keeps running");
 	zassert_equal(reg_rd(GPT_CR1) & CR1_CEN, CR1_CEN, "the counter keeps running");
+}
+
+ZTEST(pwm_agm_gptimer, test_24_a_one_tick_period_is_refused)
+{
+	const struct pwm_driver_api *api = (const struct pwm_driver_api *)PWM_DEV->api;
+
+	/* ARR is loaded as period - 1, so period 1 would load ARR = 0, and a
+	 * zero auto-reload stops the whole counter on this part rather than
+	 * just this channel. The request is refused instead.
+	 */
+	reg_wr(GPT_ARR, 0x1234U);  /* sentinel: a refused call must not touch it */
+	reg_wr(GPT_CCR0 + 4U, 0x4321U);
+
+	zassert_equal(pwm_set_cycles(PWM_DEV, 1U, 1U, 1U, PWM_POLARITY_NORMAL), -EINVAL,
+		      "the public API refuses a 1-tick period");
+	zassert_equal(api->set_cycles(PWM_DEV, 1U, 1U, 1U, PWM_POLARITY_NORMAL), -EINVAL,
+		      "the api table refuses it the same way");
+
+	zassert_equal(reg_rd(GPT_ARR), 0x1234U, "ARR untouched");
+	zassert_equal(reg_rd(GPT_CCR0 + 4U), 0x4321U, "CCRx untouched");
+
+	/* 2 is the shortest representable period, and it programs ARR = 1. */
+	zassert_ok(pwm_set_cycles(PWM_DEV, 1U, 2U, 1U, PWM_POLARITY_NORMAL),
+		   "2 ticks is accepted");
+	zassert_equal(reg_rd(GPT_ARR), 1U, "period - 1");
 }

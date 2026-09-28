@@ -29,4 +29,23 @@
 		agm,apb-clkenable-bit = <16>;
 		status = "okay";
 	};
+
+	/* A second instance of the same IP with a non-zero prescaler. The
+	 * common agm_native harness maps 0x40000000 + 32 MiB, so 0x40021000
+	 * (GPTIMER1's page on the SoC) is inside the fake window; here it just
+	 * needs to be a second, distinct, zeroed page. Leaving `prescaler` off
+	 * the first node is deliberate: that is the default every shipped board
+	 * uses, and the second node covers the divided case.
+	 */
+	gptimer_counter1_psc: counter@40021000 {
+		compatible = "agm,agrv2k-gptimer";
+		reg = <0x40021000 0x1000>;
+		interrupts = <12 1>;
+		interrupt-names = "gptimer";
+		interrupt-parent = <&fake_intc>;
+		clocks = <&fake_clk>;
+		agm,apb-clkenable-bit = <17>;
+		prescaler = <3>;
+		status = "okay";
+	};
 };

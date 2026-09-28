@@ -36,7 +36,30 @@ properties:
       instance's APB clock: 16 for GPTIMER0 through 20 for GPTIMER4 (SDK
       APB_MASK_GPTIMERx). SoC bring-up opens it from here; the driver no
       longer derives it from the register address.
+  prescaler:
+    type: int
+    default: 0
+    min: 0
+    max: 65535
     description: |
-      Frequency (Hz) of the APB/PBUS clock feeding the timer core
-      (the counter count rate). The shipped 407 bitstream runs the timer clock at
-      200 MHz (pclk == SYSCLK).
+      Value for the counter prescaler register PSC (0x28). The counter
+      advances one tick every (prescaler + 1) pclk cycles, so the tick
+      rate is `pclk / (prescaler + 1)` and counter_get_freq() reports
+      that divided value. 0 (the default) means divide by one, i.e. the
+      counter ticks at pclk, which is what every shipped node uses.
+
+      16 bits, not 32. The register sits in a 32-bit window and the SDK
+      register map declares it uint32_t, which reads as 32-bit, but the
+      implemented field is PSC[15:0]: the high half does not read back
+      and does not divide. The SDK's own GPTIMER_InitTypeDef agrees,
+      its Prescaler member being uint16_t. max is therefore 65535
+      rather than 0xffffffff, so a too-wide value is a build-time
+      devicetree error instead of a silently dropped high half.
+
+      Divide down only to reach a frequency the 32-bit ARR cannot:
+      the period is (ARR + 1) / (pclk / (prescaler + 1)), and ARR is
+      32 bits, so prescaling also divides down the longest period the
+      counter can express by the same factor. At
+      the 200 MHz the shipped 407 bitstream runs, ARR alone already spans
+      ~21.5 s, so leave this at 0 unless a board needs a tick rate low
+      enough that 2^32 counts no longer covers the wanted period.

@@ -50,10 +50,29 @@ properties:
       instance's APB clock (16..20 for GPTIMER0..4, SDK APB_MASK_GPTIMERx).
       SoC bring-up opens it from here, so a board that uses a timer only as
       a PWM source does not need the counter node enabled to get a clock.
+  prescaler:
+    type: int
+    default: 0
+    min: 0
+    max: 65535
     description: |
-      Frequency (Hz) of the APB/PBUS clock feeding the timer core
-      (the counter count rate). The shipped 407 bitstream runs the
-      timer clock at 200 MHz (pclk == SYSCLK; ).
+      Value for the counter prescaler register PSC (0x28). The counter
+      advances one tick every (prescaler + 1) pclk cycles, so the tick
+      rate is `pclk / (prescaler + 1)`. pwm_get_cycles_per_sec() reports
+      that divided value, and pwm_set_cycles() period/pulse arguments
+      are in those ticks, so an application reads back the rate it has
+      to compute them against and does not need to know the prescaler.
+
+      0 (the default) means divide by one, i.e. the counter ticks at
+      pclk, which is what every shipped node uses. Prescaling lowers
+      the tick rate but also shortens the longest period ARR (32 bits)
+      can express by the same factor; at the 200 MHz of the shipped
+      407 bitstream ARR alone already spans ~21.5 s.
+
+      16 bits, not 32: see the counter binding for the full argument.
+      The implemented field is PSC[15:0], the high half neither reads
+      back nor divides, and the SDK's GPTIMER_InitTypeDef.Prescaler is
+      uint16_t, so max is 65535.
 
   "#pwm-cells":
     const: 3

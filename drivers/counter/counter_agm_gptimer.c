@@ -26,6 +26,18 @@
  * when CNT == CCR0, so arming CCR0 with the absolute target tick
  * yields one interrupt at the requested counter value. PWM / input
  * capture / channels 1-3 are not wired up yet.
+ *
+ * Prescaler: PSC (0x28) comes from the node's `prescaler` property
+ * (default 0). The tick rate is pclk / (prescaler + 1); both get_freq()
+ * and counter_config_info.freq report that divided value.
+ *
+ * Not implemented:
+ *   - ETR external trigger, with its SMCR.ETPS trigger prescaler
+ *     (SDK GPTIMER_ETR_PrescalerTypeDef, /1../8).
+ *   - Input capture, with its per-channel CCMR.ICxPSC prescaler
+ *     (SDK GPTIMER_IC_PrescalerTypeDef, /1../8).
+ *   - Channels 1-3; only compare channel 0 backs the alarm.
+ *   - One-pulse mode (CR1.OPM) and repetition count (RCR).
  */
 
 #define DT_DRV_COMPAT agm_agrv2k_gptimer
@@ -75,6 +87,12 @@ LOG_MODULE_REGISTER(counter_agm_gptimer, CONFIG_COUNTER_LOG_LEVEL);
 
 #define AGM_GPT_TOP		UINT32_MAX
 
+/* Tick rate = pclk / (PSC + 1). Kept as a macro so the constant
+ * counter_config_info.freq initializer below stays a compile-time
+ * expression, matching what Zephyr expects there.
+ */
+#define AGM_GPT_TICK_HZ(pclk_hz, psc)	((pclk_hz) / ((psc) + 1U))
+
 struct agm_gpt_data {
 	struct k_spinlock lock;
 	counter_alarm_callback_t callback;
@@ -89,6 +107,7 @@ struct agm_gpt_cfg {
 	struct counter_config_info info;
 	uint32_t base;
 	uint32_t pclk_hz;
+	uint32_t prescaler;
 	void (*irq_config)(void);
 };
 
@@ -281,7 +300,7 @@ static uint32_t agm_gpt_get_freq(const struct device *dev)
 {
 	const struct agm_gpt_cfg *cfg = dev->config;
 
-	return cfg->pclk_hz;
+	return AGM_GPT_TICK_HZ(cfg->pclk_hz, cfg->prescaler);
 }
 
 /* Zephyr's ISR type (see uart_agm.c for the full reason): IRQ_CONNECT() pastes
@@ -347,7 +366,7 @@ static int agm_gpt_init(const struct device *dev)
 
 	/* Counter stopped, free-run 0..0xFFFFFFFF, prescale /1. */
 	agm_gpt_write(cfg, AGM_GPT_CR1, 0U);
-	agm_gpt_write(cfg, AGM_GPT_PSC, 0U);
+	agm_gpt_write(cfg, AGM_GPT_PSC, cfg->prescaler);
 	agm_gpt_write(cfg, AGM_GPT_ARR, AGM_GPT_TOP);
 	agm_gpt_write(cfg, AGM_GPT_CNT, 0U);
 
@@ -399,12 +418,15 @@ static DEVICE_API(counter, agm_gpt_api) = {
 	static const struct agm_gpt_cfg agm_gpt_cfg_##n = {			\
 		.info = {							\
 			.max_top_value = AGM_GPT_TOP,				\
-			.freq = DT_INST_PROP_BY_PHANDLE(n, clocks, clock_frequency),		\
+			.freq = AGM_GPT_TICK_HZ(					\
+				DT_INST_PROP_BY_PHANDLE(n, clocks, clock_frequency), \
+				DT_INST_PROP(n, prescaler)),			\
 			.flags = COUNTER_CONFIG_INFO_COUNT_UP,			\
 			.channels = 1U,						\
 		},								\
 		.base = DT_INST_REG_ADDR(n),					\
 		.pclk_hz = DT_INST_PROP_BY_PHANDLE(n, clocks, clock_frequency),			\
+		.prescaler = DT_INST_PROP(n, prescaler),				\
 		.irq_config = agm_gpt_irq_config_##n,				\
 	};									\
 	static struct agm_gpt_data agm_gpt_data_##n;				\

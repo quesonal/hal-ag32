@@ -22,6 +22,22 @@
 
 #define CNT_DEV  DEVICE_DT_GET(DT_NODELABEL(gptimer_counter0))
 
+/* Expectations are derived from DT, so they follow whatever `prescaler` the
+ * node sets rather than assuming /1.
+ */
+#define CNT_NODE       DT_NODELABEL(gptimer_counter0)
+#define CNT_PRESCALER  DT_PROP(CNT_NODE, prescaler)
+#define CNT_PCLK_HZ    DT_PROP_BY_PHANDLE(CNT_NODE, clocks, clock_frequency)
+
+/* Second instance, same IP, prescaler deliberately non-zero so the
+ * pclk/(PSC+1) arithmetic is exercised and not just the /1 case.
+ */
+#define CNT_PSC_DEV    DEVICE_DT_GET(DT_NODELABEL(gptimer_counter1_psc))
+#define CNT_PSC_NODE   DT_NODELABEL(gptimer_counter1_psc)
+#define CNT_PSC_VALUE  DT_PROP(CNT_PSC_NODE, prescaler)
+#define CNT_PSC_PCLK_HZ  DT_PROP_BY_PHANDLE(CNT_PSC_NODE, clocks, clock_frequency)
+#define CNT_PSC_BASE   DT_REG_ADDR(CNT_PSC_NODE)
+
 /* Register offsets (drivers/counter/counter_agm_gptimer.c). */
 #define R_CR1   0x00U
 #define R_DIER  0x0cU
@@ -75,9 +91,12 @@ ZTEST(counter_agm_gptimer, test_01_init_sets_up_the_free_running_counter)
 {
 	zassert_true(device_is_ready(CNT_DEV), "the counter came up against the fake window");
 
-	/* Free-run 0..0xffffffff, prescaler /1, compare channel 0 in toggle mode
-	 * (its OC output is never routed to a pin, so it only makes CC0IF). */
-	zassert_equal(rd(R_PSC), 0U, "prescaler /1");
+	/* Free-run 0..0xffffffff, compare channel 0 in toggle mode (its OC
+	 * output is never routed to a pin, so it only makes CC0IF).
+	 *
+	 * The node leaves `prescaler` at its default of 0, so PSC reads back
+	 * /1 and the tick rate equals pclk. */
+	zassert_equal(rd(R_PSC), CNT_PRESCALER, "PSC matches the node's prescaler");
 	zassert_equal(rd(R_ARR), 0xffffffffU, "the 32-bit top is the auto-reload value");
 	/* OC0M = 0b011 (toggle) -- not the 0b111 mask value: the channel only
 	 * has to make CC0IF, its output never reaches a pin. */
@@ -86,7 +105,8 @@ ZTEST(counter_agm_gptimer, test_01_init_sets_up_the_free_running_counter)
 	zassert_equal(rd(R_DIER), 0U, "no interrupts until something asks for one");
 
 	zassert_equal(counter_get_top_value(CNT_DEV), 0xffffffffU, "the top is fixed");
-	zassert_equal(counter_get_frequency(CNT_DEV), 200000000U, "the counter ticks at pclk");
+	zassert_equal(counter_get_frequency(CNT_DEV), CNT_PCLK_HZ / (CNT_PRESCALER + 1U),
+		      "the tick rate is pclk / (prescaler + 1)");
 }
 
 ZTEST(counter_agm_gptimer, test_10_start_and_stop_toggle_the_counter_enable)
@@ -246,4 +266,25 @@ ZTEST(counter_agm_gptimer, test_31_pending_reports_the_compare_and_wrap_flags)
 
 	wr(R_SR, SR_UIF);
 	zassert_equal(counter_get_pending_int(CNT_DEV), SR_UIF, "the wrap flag");
+}
+
+ZTEST(counter_agm_gptimer, test_40_prescaler_divides_the_tick_rate)
+{
+	/* The second instance sets prescaler = 3, i.e. divide by four. Two
+	 * things have to hold: the driver writes the property into PSC, and
+	 * get_freq() reports the divided rate rather than the raw pclk.
+	 */
+	uint32_t psc = *(volatile uint32_t *)(CNT_PSC_BASE + R_PSC);
+
+	zassert_not_equal(CNT_PSC_VALUE, 0U, "the fixture is pointless unless it divides");
+	zassert_equal(psc, CNT_PSC_VALUE, "the driver programmed PSC from the node");
+	zassert_equal(counter_get_frequency(CNT_PSC_DEV),
+		      CNT_PSC_PCLK_HZ / (CNT_PSC_VALUE + 1U),
+		      "get_freq() reports pclk / (prescaler + 1)");
+
+	/* Sanity: the /1 instance must be unaffected by the divided one, i.e.
+	 * the divisor is a per-node property, not a shared register default.
+	 */
+	zassert_equal(counter_get_frequency(CNT_DEV), CNT_PCLK_HZ / (CNT_PRESCALER + 1U),
+		      "the /1 instance still reports pclk");
 }

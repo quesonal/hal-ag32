@@ -41,9 +41,14 @@
  * Not implemented:
  *   - Complementary outputs (CHxN), dead-time, break input (BDTR
  *     DTG/BKE fields).
- *   - Counter prescaler (PSC) — left at 0 (pclk rate). Driver
- *     assumes pclk == SYSCLK and computes period in counter ticks.
  *   - Channel synchronization (CCPC bit in CR2).
+ *   - ETR external trigger, with its SMCR.ETPS trigger prescaler
+ *     (SDK GPTIMER_ETR_PrescalerTypeDef, /1../8).
+ *
+ * Prescaler: PSC (0x28) comes from the node's `prescaler` property
+ * (default 0) and is programmed at init, before the EGR.UG that latches
+ * it. The tick rate is pclk / (prescaler + 1), and
+ * pwm_get_cycles_per_sec() reports that divided value.
  *
  * On-target verification (register-level, no bitstream dependency):
  *   1. driver binds, device_is_ready
@@ -124,6 +129,7 @@ LOG_MODULE_REGISTER(pwm_agm_gptimer, CONFIG_PWM_LOG_LEVEL);
 struct pwm_agm_gptimer_config {
 	volatile uint32_t *base;
 	uint32_t pclk_hz;
+	uint32_t prescaler;
 	/* CH0..3 pins, from the node's pinctrl state (gptN_pwm_default):
 	 * AGM_PINCTRL() cells applied by pinctrl_configure_pins(). */
 	const struct pinctrl_dev_config *pincfg;
@@ -190,6 +196,7 @@ static int pwm_agm_gptimer_set_cycles(const struct device *dev,
 	 *                          channels keep running (the caller is
 	 *                          expected to have used pwm_set_cycles() with
 	 *                          a real period to re-enable it).
+	 *   period_cycles == 1  -> -EINVAL: not representable, see below.
 	 *   pulse_cycles  == 0  -> 0 % duty: the channel stays enabled and
 	 *                          drives the pin continuously low.
 	 * Anything else is the usual ARR/CCRx programming below. A period of 0
@@ -200,12 +207,14 @@ static int pwm_agm_gptimer_set_cycles(const struct device *dev,
 		return 0;
 	}
 
-	/* No upper bound to enforce: ARR and CCRx are 32-bit registers, so every
-	 * uint32_t period is representable (the old `period_cycles > UINT32_MAX`
-	 * test could never fire).
+	/* ARR is the period; we use 0..ARR inclusive, so the value loaded is
+	 * (period - 1). A period of 1 would load ARR = 0, and on this part a
+	 * zero auto-reload stops the whole counter rather than just this
+	 * channel, so the shortest representable period is 2 ticks. ARR and
+	 * CCRx are otherwise 32-bit, with no upper bound to enforce (the old
+	 * `period_cycles > UINT32_MAX` test could never fire).
 	 *
-	 * ARR is the period; we use 0..ARR inclusive, so the value loaded is
-	 * (period - 1). Pulse is the high-time in counter ticks (CCRx value).
+	 * Pulse is the high-time in counter ticks (CCRx value).
 	 * A pulse longer than the period is refused, not clamped: Zephyr's
 	 * z_impl_pwm_set_cycles() already answers -EINVAL for it, every upstream
 	 * PWM driver that checks does the same (pwm_ameba, pwm_bitbang,
@@ -214,6 +223,11 @@ static int pwm_agm_gptimer_set_cycles(const struct device *dev,
 	 * through the API (see below). `pulse == period` stays legal and
 	 * *is* 100 %: CCRx = period > ARR = period - 1, so `CNT < CCRx` always
 	 * holds and the channel stays active for the whole period. */
+	if (period_cycles < 2U) {
+		LOG_ERR("period %u below the 2-tick minimum", period_cycles);
+		return -EINVAL;
+	}
+
 	if (pulse_cycles > period_cycles) {
 		LOG_ERR("pulse %u exceeds period %u", pulse_cycles, period_cycles);
 		return -EINVAL;
@@ -268,9 +282,10 @@ static int pwm_agm_gptimer_get_cycles_per_sec(const struct device *dev,
 	if (channel >= AGMV2K_GPT_CHANNELS) {
 		return -EINVAL;
 	}
-	/* PSC is hard-wired to 0 in v1, so the counter tick is
-	 * exactly pclk. */
-	*cycles = cfg->pclk_hz;
+	/* The counter ticks at pclk / (PSC + 1); the prescaler comes
+	 * from the node and defaults to 0 (divide by one).
+	 */
+	*cycles = cfg->pclk_hz / (cfg->prescaler + 1U);
 	return 0;
 }
 
@@ -305,7 +320,11 @@ static int pwm_agm_gptimer_init(const struct device *dev)
 	/* Set up the counter in up-counting mode, ARR preload on.
 	 * BDTR.MOE enables the OCx outputs to the fabric (without
 	 * this the pin never drives even if CCER.CCxE is set).
+	 *
+	 * PSC has to be written before the EGR.UG below, which is what
+	 * latches it into the running counter.
 	 */
+	pwm_write(cfg, AGMV2K_GPT_PSC, cfg->prescaler);
 	pwm_set_bits(cfg, AGMV2K_GPT_CR1, AGMV2K_GPT_CR1_ARPE);
 	pwm_set_bits(cfg, AGMV2K_GPT_BDTR, AGMV2K_GPT_BDTR_MOE);
 	pwm_set_bits(cfg, AGMV2K_GPT_CR1, AGMV2K_GPT_CR1_CEN);
@@ -336,6 +355,7 @@ static int pwm_agm_gptimer_init(const struct device *dev)
 		.base = (volatile uint32_t *)				\
 			DT_INST_REG_ADDR(n),				\
 		.pclk_hz = DT_INST_PROP_BY_PHANDLE(n, clocks, clock_frequency),		\
+		.prescaler = DT_INST_PROP(n, prescaler),				\
 		.pincfg = PINCTRL_DT_INST_DEV_CONFIG_GET(n),		\
 	};								\
 									\
