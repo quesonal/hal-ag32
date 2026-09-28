@@ -1,0 +1,11 @@
+# AGM AgRV2K 407 board selection.
+#
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config BOARD_AGM_AGRV2K_407
+	bool "AGM AgRV2K 407 (L100)"
+	select SOC_AGM_AGRV2K
+	help
+	  AGM AgRV2K 407 development board. RV32IMAFC @ 240 MHz,
+	  1 MB flash, 128 KB SRAM, on-die L100 FPGA fabric.

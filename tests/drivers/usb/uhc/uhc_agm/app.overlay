@@ -1,0 +1,28 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * USB0 at its real address (0x41001000) with the real host binding. Note the
+ * host node is a *separate* node from the device-mode usb@41001000 (see
+ * dts/riscv/agm/agrv2k.dtsi): one node may only back one driver, and the role
+ * is picked by which node is enabled. IRQ number is native_sim's range (the
+ * SoC's is PLIC 35).
+ */
+
+/ {
+	fake_intc: interrupt-controller {
+		compatible = "vnd,fake-intc";
+		interrupt-controller;
+		#interrupt-cells = <2>;
+	};
+
+	uhc_agm0: uhc@41001000 {
+		compatible = "agm,agrv2k-uhc";
+		reg = <0x41001000 0x1000>;
+		interrupts = <14 1>;
+		interrupt-names = "usb";
+		interrupt-parent = <&fake_intc>;
+		maximum-speed = "full-speed";
+		agm,ahb-clkenable-bit = <1>;
+		agm,ahb-reset-bit = <1>;
+		status = "okay";
+	};
+};

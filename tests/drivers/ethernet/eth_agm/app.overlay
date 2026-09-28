@@ -1,0 +1,85 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Devicetree for the native Ethernet suite.
+ *
+ * The node keeps the *real* MAC address (0x41040000) and the real binding, so
+ * what the test reads back is the production register map. The pinctrl state
+ * is the *generated* one the LAN8720 samples use
+ * (dts/riscv/agm/pinctrl-devmac.dtsi, bitstream md5
+ * 6378549f3a8f82dd386353077f3d4a02): 10 AGM_PINCTRL() cells whose last two
+ * entries are the bidirectional MDIO pin written once as OUTPUT and once as
+ * INPUT -- the test pins what the decoder does with that (the later cell
+ * wins), because the order in that list is load-bearing.
+ *
+ * The IRQ number is 12 instead of the SoC's PLIC 36: native_sim's controller
+ * only knows 0..31, and this suite really does pend the line.
+ *
+ * mdio0/phy0 stay disabled: eth_agm.c does not talk to them (the PHY driver
+ * calls eth_agm_set_link_state() from its own monitor work), so the MAC suite
+ * does not drag the PHY framework in. Their own suites cover them.
+ */
+
+#include <zephyr/dt-bindings/pinctrl/agm-agrv2k-pinctrl.h>
+
+/ {
+	fake_intc: interrupt-controller {
+		compatible = "vnd,fake-intc";
+		interrupt-controller;
+		#interrupt-cells = <2>;
+	};
+
+	agm_pinctrl: pinctrl {
+		compatible = "agm,agrv2k-pinctrl";
+		status = "okay";
+
+		eth0_default: eth0_default {
+			agm,pins =
+				<AGM_PINCTRL(7, 7, AGM_PINCTRL_NO_DIR)>,
+				<AGM_PINCTRL(8, 0, AGM_PINCTRL_NO_DIR)>,
+				<AGM_PINCTRL(9, 1, AGM_PINCTRL_OUTPUT)>,
+				<AGM_PINCTRL(9, 2, AGM_PINCTRL_OUTPUT)>,
+				<AGM_PINCTRL(9, 5, AGM_PINCTRL_OUTPUT)>,
+				<AGM_PINCTRL(8, 5, AGM_PINCTRL_NO_DIR)>,
+				<AGM_PINCTRL(7, 5, AGM_PINCTRL_NO_DIR)>,
+				<AGM_PINCTRL(9, 7, AGM_PINCTRL_OUTPUT)>,
+				<AGM_PINCTRL(4, 0, AGM_PINCTRL_OUTPUT)>,
+				<AGM_PINCTRL(4, 0, AGM_PINCTRL_INPUT)>;
+		};
+	};
+
+	eth_agm0: ethernet@41040000 {
+		compatible = "agm,agrv2k-emac";
+		reg = <0x41040000 0x28>;
+		interrupts = <12 1>;
+		interrupt-parent = <&fake_intc>;
+		agm,ahb-clkenable-bit = <3>;	/* AHB_MASK_MAC0 on the real part */
+		agm,ahb-reset-bit = <3>;
+		phy-connection-type = "rmii";
+		/* Present so the driver's DT lookup resolves; the node itself is
+		 * disabled, so there is no PHY device and the MAC keeps its
+		 * carrier under application control (the suite drives the link
+		 * state through eth_agm_set_link_state() directly). */
+		phy-handle = <&phy0>;
+		/* Locally administered, not the board's 00:00:5A:... -- the suite
+		 * asserts this exact address lands in MACMSB/MACLSB and in the
+		 * net_if link address. */
+		local-mac-address = [02 00 5A 5A 00 01];
+		pinctrl-0 = <&eth0_default>;
+		pinctrl-names = "default";
+		status = "okay";
+
+		/* Declared but off: see the file header. */
+		mdio0: mdio {
+			compatible = "agm,agrv2k-mdio";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+
+			phy0: ethernet-phy@1 {
+				compatible = "microchip,lan8720";
+				reg = <1>;
+				status = "disabled";
+			};
+		};
+	};
+};

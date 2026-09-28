@@ -1,0 +1,39 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AGM AgRV2K CRC calculation unit. The register set is
+  the familiar STM32-CRC one: DR (data, 8/16/32-bit access), IDR (8-bit
+  scratch), CR (poly size 7/8/16/32, input reversal byte/halfword/word,
+  bit-level output reversal, endianness, RESET), INIT (seed, a write reloads
+  DR) and POL (programmable polynomial, default 0x04C11DB7).
+
+  It lives in the SYS block's *AHB* domain, not the APB one: the clock gate is
+  bit 2 of SYS.AHB_CLKENABLE and the reset release is bit 2 of SYS.AHB_RESET
+  (the vendor example gates it with SYS_EnableAHBClock(AHB_MASK_CRC0)). Both
+  are opened by the SoC bring-up from the two properties below -- the driver
+  itself never touches the SYS block.
+
+compatible: "agm,agrv2k-crc"
+
+include: [base.yaml]
+
+properties:
+  reg:
+    required: true
+
+  agm,ahb-clkenable-bit:
+    type: int
+    required: true
+    enum: [2]
+    description: |
+      Bit index in SYS.AHB_CLKENABLE (0x03000000 + 0x70) gating CRC0's AHB
+      clock. SoC bring-up opens it.
+
+  agm,ahb-reset-bit:
+    type: int
+    required: true
+    enum: [2]
+    description: |
+      Bit index in SYS.AHB_RESET (0x03000000 + 0x50) holding CRC0 in reset;
+      write 1 = assert, so bring-up clears it.

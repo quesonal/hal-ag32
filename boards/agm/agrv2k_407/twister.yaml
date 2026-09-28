@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Twister platform description for agrv2k_407 (L100, 200 MHz SYSCLK).
+#
+# Twister does not read board.yml for this; without a platform file the
+# board is invisible to `west twister` and every sample's
+# `integration_platforms: agrv2k_407` fails with "unrecognized platform"
+# (the platform is dropped in twisterlib/platform.py when neither
+# twister.yaml nor a legacy <board>.yaml exists in the board directory).
+#
+# ram/flash are in KiB. supported: only what a Zephyr driver actually
+# backs today.
+type: mcu
+arch: riscv
+vendor: agm
+toolchain:
+  - zephyr
+ram: 128
+flash: 1024
+supported:
+  # can0 is enabled on this board only;
+  # the other three keep the node disabled, so they do not list it.
+  - can
+  - counter
+  - dma
+  - flash
+  - gpio
+  - i2c
+  - pinctrl
+  - pwm
+  - uart
+  - usb_device
+  - watchdog

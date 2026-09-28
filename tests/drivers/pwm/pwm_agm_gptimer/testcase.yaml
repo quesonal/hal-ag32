@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.pwm.pwm_agm_gptimer.native:
+    platform_allow:
+      - native_sim
+    tags:
+      - pwm
+      - hal_ag32

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Two-cell interrupt controller for the native AGM driver suites.
+#
+# The AgRV2K MAC binding (the grandparent of the PHY node) requires
+# `interrupts`, and native_sim ships no interrupt controller of its own
+# (posix.dtsi is a bare skeleton). No driver: just the DT shape.
+#
+# "vnd" is the vendor prefix Zephyr reserves for exactly this: "a stand-in for
+# a real vendor which can be used in examples and tests"
+# (dts/bindings/vendor-prefixes.txt).
+
+description: Fake interrupt controller for native AGM driver tests
+
+compatible: "vnd,fake-intc"
+
+include: [interrupt-controller.yaml, base.yaml]
+
+interrupt-cells:
+  - irq
+  - priority

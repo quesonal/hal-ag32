@@ -1,0 +1,50 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+title: Pervasive Displays E2xxx (G2/iTC COG) e-paper on the AgRV2K SPI engine
+
+description: |
+  Six-wire EPD front end on one of the AgRV2K SPI engines: the controller
+  drives SCL (SCK), SDA (MOSI) and CSB (CSN) -- mode 0, MSB first -- while
+  D/C#, RST_N and the panel's BUSY_N output are plain GPIOs. The panel's SDA
+  is an input only, so the engine's MISO line is unused.
+
+  The panel wants its chip select pulsed around *every* byte ("if register
+  data is more than one byte, the CS# pulse is necessary between each data
+  byte", application note "SPI Timing Format"). The AgRV2K engine asserts CSN
+  for exactly one transfer, so one `spi_write()` per byte gives that framing
+  without any GPIO juggling.
+
+  Panels of this family (E2271CS091 and relatives) load their waveform from
+  the driver's OTP during init and only support **full** updates: there is no
+  partial/fast refresh to model here.
+
+compatible: "agm,epd-g2"
+
+include: [spi-device.yaml]
+
+properties:
+  dc-gpios:
+    type: phandle-array
+    required: true
+    description: Data/command (DC) -- 0 = command, 1 = data.
+
+  reset-gpios:
+    type: phandle-array
+    required: true
+    description: System reset (RST_N), active low.
+
+  busy-gpios:
+    type: phandle-array
+    required: true
+    description: Busy output (BUSY_N) -- low means the panel is working.
+
+  width:
+    type: int
+    required: true
+    description: Panel width in pixels (E2271CS091 = 264).
+
+  height:
+    type: int
+    required: true
+    description: Panel height in pixels (E2271CS091 = 176).

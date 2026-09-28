@@ -1,0 +1,8 @@
+board:
+  name: agrv2k_test
+  full_name: "AGM AgRV2K Test (L100, 256 KB flash, SDK test fixture)"
+  vendor: agm
+  socs:
+    - name: agrv2k
+      variants:
+        - name: agrv2k

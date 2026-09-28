@@ -1,0 +1,33 @@
+# AGM AgRV2K timer configuration options
+#
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config COUNTER_AGM_TIMER
+	bool "AGM AgRV2K dual timer (TIMER0/1) counter driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_TIMER_ENABLED
+	help
+	  Enable counter driver for the AGM AgRV2K SP804-style dual
+	  32-bit timer units (TIMER0/1, two sub-timers each, exposed as
+	  two alarm channels).
+
+config COUNTER_AGM_GPTIMER
+	bool "AGM AgRV2K general-purpose timer (GPTIMER0-4) counter driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_GPTIMER_ENABLED
+	help
+	  Enable counter driver for the AGM AgRV2K STM32-style general
+	  purpose timers (GPTIMER0-4, one compare-channel alarm each).
+
+
+config COUNTER_AGM_RTC
+	bool "AGM AgRV2K RTC counter driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_RTC_ENABLED
+	help
+	  Enable counter driver for the AGM AgRV2K backup-domain RTC
+	  (0x40000000, STM32F1-style). Free-running 32-bit counter at
+	  ~1 Hz (prescaler-based) with one alarm channel and an
+	  overflow/top callback. The RTC keeps running in stop/standby
+	  mode and is the wake source for deep low-power states .

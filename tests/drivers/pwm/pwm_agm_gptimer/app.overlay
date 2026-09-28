@@ -1,0 +1,41 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Devicetree for the native GPTIMER/PWM suite: the real register address
+ * (0x40020000 = GPTIMER0), the real binding, and the real pinctrl state shape
+ * (the four CH0..3 pins as AGM_PINCTRL(1, 0..3, NO_DIR), copied from
+ * dts/riscv/agm/agrv2k.dtsi's gpt0_pwm_default). No interrupts: the PWM side
+ * of the IP has none.
+ */
+
+#include <zephyr/dt-bindings/pinctrl/agm-agrv2k-pinctrl.h>
+
+/ {
+	fake_clk: clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+	};
+
+	agm_pinctrl: pinctrl {
+		compatible = "agm,agrv2k-pinctrl";
+		status = "okay";
+
+		gpt0_pwm_default: gpt0_pwm_default {
+			agm,pins = <AGM_PINCTRL(1, 0, AGM_PINCTRL_NO_DIR)>,
+				   <AGM_PINCTRL(1, 1, AGM_PINCTRL_NO_DIR)>,
+				   <AGM_PINCTRL(1, 2, AGM_PINCTRL_NO_DIR)>,
+				   <AGM_PINCTRL(1, 3, AGM_PINCTRL_NO_DIR)>;
+		};
+	};
+
+	gpt0_pwm: pwm@40020000 {
+		compatible = "agm,agrv2k-gptimer-pwm";
+		reg = <0x40020000 0x1000>;
+		clocks = <&fake_clk>;
+		agm,apb-clkenable-bit = <16>;
+		pinctrl-0 = <&gpt0_pwm_default>;
+		pinctrl-names = "default";
+		#pwm-cells = <3>;
+		status = "okay";
+	};
+};

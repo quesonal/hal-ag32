@@ -1,0 +1,22 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AgRV2K on-die flash controller.
+
+  The flash array itself is XIP-mapped at 0x8000_0000 (child `soc-nv-flash`
+  node); this controller adds program/erase, the option-byte window
+  (0x8100_0000) and the status/error bits at 0x4000_1000. The register
+  layout matches the vendor SDK's
+  `FLASH_TypeDef` in framework-agrv_sdk/src/flash.h, whose sequences this
+  driver follows: unlock with the two keys written to KEYR, erase with
+  AR + CR.SER + CR.STRT, program by setting CR.PG and writing the word
+  through the XIP window.
+
+  Erase granularity is 4 KiB (the SDK's FLASH_SECTOR_SIZE and the value the
+  AgRV openocd flow's `flash erase_address pin` assumes); programming is
+  32-bit (SDK FLASH_ProgramWord).
+
+compatible: "agm,agrv2k-flash-controller"
+
+include: flash-controller.yaml

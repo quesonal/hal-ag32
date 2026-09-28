@@ -1,0 +1,146 @@
+/*
+ * Copyright (c) 2026 AgRV Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * AGM AgRV2K Test board device tree.
+ *
+ * Memory map (board-specific sizes override SoC defaults):
+ *   FLASH (XIP): 0x80000000, 256 KB
+ *   SRAM:        0x20000000, 128 KB
+ *
+ * Pin mux is configured by the on-die FPGA bitstream (board.ve) — this
+ * .dts file only declares runtime electrical attributes (pull, drive).
+ */
+
+/dts-v1/;
+#include <mem.h>
+#include <agm/agrv2k.dtsi>
+#include <agm/agrv2k-pins.dtsi>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <agm/agrv2k-board.dtsi>
+
+/* SYSCLK is one number per board. clk0 feeds every peripheral
+ * (UART/CAN/timers/PWM/WDT/I2C take it through the `clocks`
+ * phandle) and the sys controller reads the same phandle for its
+ * SCLK divider math, so a rate change is these three defines (SYSCLK /
+ * HSE / FLASH_MAX, + the matching bitstream). cpu0 must stay a literal: the kernel
+ * timer's Kconfig reads it as an integer. */
+#define AGM_SYSCLK_HZ    100000000
+#define AGM_FLASH_MAX_HZ 50000000
+#define AGM_HSE_HZ         8000000
+
+/ {
+	model = "AGM AgRV2K Test board (L100, 100 MHz SYSCLK / 50 MHz BUSCLK)";
+	compatible = "agm,agrv2k_test";
+
+	chosen {
+		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
+		zephyr,flash = &flash0;
+		zephyr,sram = &sram0;
+		/* XIP code lives in FLASH. Without this, CONFIG_XIP=y has
+		 * no effect: the linker has no ROM region to put .text in,
+		 * so all segments stay in SRAM (and the AgRV2K ROM
+		 * bootloader doesn't copy SRAM-execution images from FLASH,
+		 * leaving the CPU stuck on the first .data access). */
+		zephyr,code-partition = &flash0;
+	};
+
+	sram0: memory@20000000 {
+		compatible = "mmio-sram";
+		reg = <0x20000000 DT_SIZE_K(128)>;
+	};
+};
+
+/* This board's part has 256 KB of on-die flash (the 407 has 1 MB); everything
+ * else about the node -- controller, 4 KB erase pages, 32-bit programming --
+ * comes from agrv2k.dtsi.
+ *
+ * Top-level override, like &agrv2k_pins below (and for the same reason): a
+ * label reference inside the root node is a dts parse error, and this one sat
+ * for a while (the board did not build at all --
+ * the 407 does not write this override, so `west twister -p agrv2k_407` never
+ * noticed).
+ */
+&flash0 {
+	reg = <0x80000000 DT_SIZE_K(256)>;
+};
+
+/* Test board PLL → SYSCLK 100 MHz. Same one-place rule as the other
+ * boards: the numbers come from the defines at the top of this file, and
+ * generate_board_ve.py fails if they disagree with &clk0 / &cpu0.
+ * NOTE: this is a top-level reference override — it must not sit inside
+ * the root node (dts parse error, fixed). */
+&agrv2k_pins {
+	sysclk-frequency = <AGM_SYSCLK_HZ>;
+	hseclk-frequency = <AGM_HSE_HZ>;
+};
+
+/* CAN0 — deliberately NOT enabled on this board.
+ *
+ * The pins are routed: the shared agrv2k-pins.dtsi (mirroring the
+ * vendor board.ve, which carries CAN0_TX0 PIN_39 / CAN0_RX0 PIN_38 on
+ * all four variants) already describes the CAN route, so an
+ * `&can0 { status = "okay"; }` override would arm the controller. It
+ * stays off because there is no dev board record for this variant: only the
+ * 407 has one (125 kbit/s two-node link to an ESP32-C3, plus the
+ * upstream tests/drivers/can/{api,timing} suites).
+ *
+ * The engine clock is not a blocker any more. can0 takes f_can from its
+ * devicetree `clocks` phandle (dts/riscv/agm/agrv2k.dtsi), and this
+ * board already drives clk0 at 100 MHz, so f_can = 100 MHz and the
+ * slowest representable bit rate becomes 31.25 kbit/s. The SYSCLK
+ * tracking was checked on a 100 MHz bitstream (a 250 kbit/s
+ * request on that bitstream equals 125 kbit/s on the bus).
+ *
+ * Do not add chosen/alias while can0 is disabled: DT_CHOSEN() would
+ * resolve but device_is_ready(can0) would stay false, moving the
+ * failure from build time to run time.
+ */
+
+/* UART0 — board console.
+ *
+ * Pins PIN_68 (TX) / PIN_69 (RX) are routed to GPIO7 bit 6 / GPIO6 bit 1
+ * by the FPGA bitstream, with the AFSEL register at GPIOx + 0x420. soc.c
+ * sets the AFSEL bits at PRE_KERNEL_1 (uart_route_pins_to_af). Here we
+ * only configure its protocol parameters:
+ *
+ *   (baud clock)                — the PL011 driver takes its clock from the
+ *                                 `clocks` phandle (clk0 = AGM_SYSCLK_HZ):
+ *                                 at 100 MHz / 115200 baud, IBRD=54 FBRD=16.
+ *   current-speed   = 115200
+ *   parity          = "none"
+ *   stop-bits       = "1"
+ *   data-bits       = 8
+ *
+ * NO pinctrl node: pull-up/down + drive strength are bitstream (ASF/CPLD)
+ * settings on AgRV2K, not runtime registers. If a pin needs a weak
+ * pull-up, set it in the
+ * bitstream.
+ */
+&uart0 {
+	status = "okay";
+	current-speed = <115200>;
+	parity = "none";
+	stop-bits = "1";
+	data-bits = <8>;
+};
+
+/* PL011 baud clock parent — must match cpu0 below. */
+&clk0 {
+	clock-frequency = <AGM_SYSCLK_HZ>;
+};
+
+/* Board clock: 100 MHz SYSCLK / 50 MHz BUSCLK (per board.ve), i.e. the two
+ * AGM_* defines at the top of this file. clk0 feeds cpu0, the PL011 and every
+ * other peripheral (through the `clocks` phandle), and the sys controller
+ * reads the same phandle for its SCLK divider math. */
+&cpu0 {
+	clock-frequency = <AGM_SYSCLK_HZ>;
+};
+&sys {
+	flash-max-frequency = <AGM_FLASH_MAX_HZ>;
+};

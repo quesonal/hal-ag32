@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.can.can_agm.native:
+    platform_allow:
+      - native_sim
+    tags:
+      - can
+      - hal_ag32

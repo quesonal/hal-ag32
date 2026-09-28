@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Board defaults for AGM AgRV2K 103.
+# RISCV / ISA / GP / PRIVILEGED are all select'd by SOC_AGM_AGRV2K,
+# so they must NOT be set here — they are non-promptable.
+
+CONFIG_SOC_AGM_AGRV2K=y
+CONFIG_BOARD_AGM_AGRV2K_103=y
+CONFIG_SYS_CLOCK_EXISTS=y
+CONFIG_XIP=y

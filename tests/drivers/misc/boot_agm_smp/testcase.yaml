@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.misc.boot_agm_smp.api:
+    platform_allow:
+      - native_sim
+    tags:
+      - flash
+      - hal_ag32
+  # The same suite with the authorization gate on: the publish/erase commands need a
+  # signed 0x40 command, so the test carries a P-256 key and signs the nonce
+  # the device hands out (which is also what makes it check the "no
+  # authorization" way of saying no, EACCESSDENIED, end to end).
+  drivers.misc.boot_agm_smp.api_locked:
+    extra_configs:
+      - CONFIG_BOOT_AGM_LOCK_PRODUCTION=y
+    platform_allow:
+      - native_sim
+    tags:
+      - flash
+      - hal_ag32
+  # The same suite, but booted with a *corrupt* boot record: the driver reads
+  # the record once, at init, so the "record present and unusable" answer
+  # (driver: -EINVAL, mgmt: EINVAL 3 rather than EUNKNOWN 1) cannot be reached
+  # from a runtime state -- the overlay only adds a marker node and the suite
+  # plants the bad magic one init priority ahead of boot_agm_init().
+  drivers.misc.boot_agm_smp.api_corrupt_record:
+    extra_args:
+      - EXTRA_DTC_OVERLAY_FILE=corrupt_record.overlay
+    platform_allow:
+      - native_sim
+    tags:
+      - flash
+      - hal_ag32

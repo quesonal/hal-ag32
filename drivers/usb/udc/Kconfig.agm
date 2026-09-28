@@ -1,0 +1,13 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config UDC_AGM
+	bool "AgRV2K USB0 device controller driver"
+	depends on DT_HAS_AGM_AGRV2K_USB0_ENABLED
+	default y
+	imply UDC_WORKQUEUE
+	help
+	  Device-only UDC driver for the AgRV2K on-die USB0 controller
+	  (FSL/ChipIdea-like dual-role silicon in device mode, FS only).
+	  DP/DM are on fixed pins (PIN_70/71), so the controller needs no
+	  pinctrl state of its own.

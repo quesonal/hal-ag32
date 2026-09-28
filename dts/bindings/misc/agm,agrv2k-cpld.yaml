@@ -1,0 +1,45 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AgRV2K CPLD (FPGA fabric) AHB slave window.
+
+  The SoC address decoder routes any MCU load/store in
+  0x60000000-0x7FFFFFFF to the fabric's `mem_ahb_*` slave port (vendor
+  documents it in its MCU+CPLD programming note; the port shows up in the
+  generated netlist, <build>/logic/board.vx). Writes land at fabric
+  offset haddr[23:0] of the window, reads come back on the same bus, and a
+  fabric that does not answer the handshake stalls the CPU -- so the
+  node only makes sense on a board whose bitstream implements a slave.
+
+  The register map *inside* the window is defined by the user's Verilog
+  (`analog_ip.v` in the vendor examples), not by the SoC, which is why
+  this binding describes nothing but the window itself. The node carries
+  the AGM driver (drivers/misc/cpld_agm.c, CONFIG_CPLD_AGM) and is accessed
+  through include/zephyr/drivers/misc/cpld_agm.h
+  (agm_cpld_read32 / write32 / update_bits / get_base / get_size), which
+  range-checks every offset against `reg` before touching the bus.
+
+  Do NOT add "syscon" to the compatible list as well: the generic syscon
+  driver would then instantiate a second device for this node, and both
+  definitions carry the node's ordinal name (`__device_dts_ord_<n>`), so
+  the link fails with "multiple definition". The
+  syscon driver stays available for other nodes (sys@0x3000000 keeps it).
+
+  Bitstream-specific behaviour (named registers, CPLD-to-GPIO interrupts,
+  DMA handshake) extends the driver, not this binding, until the semantics
+  are stable enough to describe in devicetree -- see
+
+
+compatible: "agm,agrv2k-cpld"
+
+include: [base.yaml]
+
+properties:
+  reg:
+    required: true
+    description: |
+      The fabric window as seen by the MCU. Must cover the highest offset
+      the bitstream decodes: the vendor examples put ADC0/1/2 at +0x0 /
+      +0x1000 / +0x2000 and SPI0 at +0x6000, so a board that uses them
+      needs at least 0x8000. The driver rejects any access outside it.

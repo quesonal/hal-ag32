@@ -1,0 +1,8 @@
+board:
+  name: agrv2k_103
+  full_name: "AGM AgRV2K 103 (L100, 256 KB flash)"
+  vendor: agm
+  socs:
+    - name: agrv2k
+      variants:
+        - name: agrv2k

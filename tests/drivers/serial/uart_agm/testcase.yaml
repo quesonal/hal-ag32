@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.serial.uart_agm.native:
+    platform_allow:
+      - native_sim
+    tags:
+      - uart
+      - hal_ag32

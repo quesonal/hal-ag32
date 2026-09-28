@@ -1,0 +1,123 @@
+# AGM AgRV2K SoC selection — referenced by board configs.
+# DT-aware: requires /cpus/cpu@0 to have clock-frequency set.
+#
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config SOC_AGM_AGRV2K
+	bool "AGM AgRV2K SoC (RV32IMAFC + on-die FPGA)"
+	select RISCV
+	select RISCV_ISA_RV32I
+	# AHB bus on AgRV2K doesn't bring exclusive transfers
+	# (LR/SC) back across the fabric -- mcause=5 / Load access fault
+	# on 0x2000_xxxx in net_pkt_unref . Don't select
+	# RISCV_ISA_EXT_A here so arch/Kconfig auto-picks
+	# ATOMIC_OPERATIONS_C (interrupt-locking emulation) when the
+	# cpu0 DT node doesn't list 'a' in riscv,isa-extensions.
+	select RISCV_ISA_EXT_M
+	select RISCV_ISA_EXT_F
+	select RISCV_ISA_EXT_C
+	select FPU
+	select RISCV_PRIVILEGED
+	select RISCV_HAS_PLIC
+	# k_busy_wait() goes through arch_busy_wait() (busy_wait.c) instead of
+	# the kernel's generic loop: the core has a 64-bit cycle counter, so a
+	# wait above 2^32 cycles is served as asked instead of wrapping through
+	# the generic path's 32-bit microsecond conversion (a 21.57 s
+	# request used to be served in 100 ms), and the cost of a microsecond is
+	# read from SYS.CLK_CNTL per call, the way the vendor SDK's UTIL_IdleUs()
+	# does it.
+	select ARCH_HAS_CUSTOM_BUSY_WAIT
+	# Power management hooks (pm_state_set / pm_state_exit_post_ops,
+	# soc/agm/agrv2k/pm.c) — enables CONFIG_PM for board/app configs.
+	select HAS_PM
+	# System timer: the upstream riscv_machine_timer
+	# driver (MTIP interrupt-driven, tickless) is used again. The DT
+	# node in dts/riscv/agm/agrv2k.dtsi enables it; the driver
+	# selects TICKLESS_CAPABLE itself. soc/agm/agrv2k/reset.S keeps
+	# MTIE clear + mtimecmp saturated through boot, and the driver
+	# only arms a finite deadline + enables MTIE at PRE_KERNEL_2 —
+	# no early-interrupt storm (see dtsi timer0 comment).
+	#
+	# History: a polling-mode timer (timer_poll.c +
+	# ARCH_HAS_CUSTOM_CPU_IDLE arch_cpu_idle) was used while MTIP
+	# stayed disabled; it only announced from the idle path, so ticks
+	# froze while any thread ran without sleeping/yielding (busy
+	# path). It was removed: the standard MTIP tick serves both idle
+	# (wfi) and busy paths.
+	# AgRV2K provides its own soc/agm/agrv2k/reset.S::__reset
+	# (SDK-style fence.i + linear padding + tail __initialize) to fix
+	# warm-reset FLASH prefetch-buffer staleness. Selecting
+	# INCLUDE_RESET_VECTOR would compile the default
+	# (5x fence.i + call __initialize) from arch/riscv/core/reset.S and
+	# break XIP firmware after `openocd -c "reset run"`. See
+	# FLASH-prefetch-stale-byte case in the
+	# zephyr-hal-ag32 repo for the full diagnosis.
+	depends on $(dt_node_has_prop,/cpus/cpu@0,clock-frequency)
+	help
+	  RV32IMAFC core with on-die programmable FPGA fabric.
+
+config AGM_FCB_BITSTREAM_COMPRESSED
+	bool "The fabric bitstream in flash is LZW-compressed"
+	depends on SOC_AGM_AGRV2K
+	help
+	  Stream the bitstream through the LZW decoder (soc/agm/agrv2k/
+	  fcb_lzw.c) instead of copying it raw. Set this when the config in
+	  flash was built compressed -- the vendor's `logic_compress = true`,
+	  which passes `set LOGIC_COMPRESS true` to Supra, and which the
+	  flashing tools record in the option bytes so the ROM decompresses it
+	  the same way. Producing the compressed form from an already-built
+	  config is tools/compress_bitstream.py; the layout the chip expects is
+	  [IDCODE][USERID][LZW stream] for the config itself, and
+	  [decompression algorithm][config] on the board (the algorithm is what
+	  the ROM runs, and the flashing tool writes it for you). That second
+	  layout shifts where the config starts inside the factory region, which
+	  is what AGM_FCB_BITSTREAM_ALGO_SIZE below is for; the devicetree's
+	  `bitstream-address` keeps describing the *region*, so a board does not
+	  need a different overlay for this option.
+
+	  Both forms hold the same fabric description, so this is a choice
+	  about the image on the board, not about the SoC. Getting it wrong is
+	  not symmetric: raw-streaming a compressed config produces a dead
+	  fabric *and* removes the CPU's clock (recovery needs BOOT0), while
+	  decompressing a raw config fails the same way at the first code. The
+	  host side refuses a bitstream that is not 99944 bytes unless
+	  AGM_BITSTREAM_ANY_SIZE=1, which is the hint that this option and the
+	  file on the board have to agree.
+
+config AGM_FCB_BITSTREAM_ALGO_SIZE
+	int "Bytes reserved in front of a compressed config for the ROM's decoder"
+	depends on AGM_FCB_BITSTREAM_COMPRESSED
+	range 0 65536
+	default 4352
+	help
+	  A compressed board's flash layout is [decompression algorithm][config],
+	  and the option byte points at the config. The ROM runs the algorithm at
+	  power-up, this image streams the config with its own decoder, and the
+	  factory slot moves by this much (include/zephyr/drivers/misc/
+	  agm_bitstream.h).
+
+	  4352 (0x1100): the SDK's write_fpga_config put its algorithm at
+	  0x800e7000 and the config at 0x800e8100 (board
+	  test). The vendor's gen_batch computes the same number as
+	  (byte count of agrv_fpga_decomp.inc + 8 + 255) & ~255, so a different
+	  SDK can ship a different one -- override this then.
+
+config AGM_SOC_SKIP_CLOCK_INIT
+	bool "Skip the boot-time fabric/clock bring-up (chain-loaded images)"
+	depends on SOC_AGM_AGRV2K
+	help
+	  The PRE_KERNEL_1 hook in soc.c programs the fabric from the on-die
+	  bitstream, forces HSI, then switches the CPU to the bitstream's PLL
+	  PLL). An image that another AgRV2K
+	  image chain-loaded -- e.g. the payload of samples/spi_boot_loader --
+	  must NOT repeat that: it is already running on the fabric clock, and
+	  re-programming the fabric deactivates the clock the CPU is executing
+	  from.: the core froze with no console output and
+	  SWD went to "stalled AP operation", the documented symptom of a
+	  fabric torn down under a running core
+	  (documented as a "stalled AP operation").
+
+	  With this set, soc.c performs no clock/fabric/pin setup at all and
+	  expects the image it was loaded by to have left UART0, the APB gates
+	  for the nodes it enables and the pin routing in place.

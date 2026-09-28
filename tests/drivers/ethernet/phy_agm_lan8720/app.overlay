@@ -1,0 +1,75 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Devicetree for the native LAN8720 suite: MAC0 (real address) -> mdio0 ->
+ * phy0 at prtad 1, exactly like the board's lan8720_* overlays minus the
+ * reset GPIO (the board does not have one either: it soft-resets over MII).
+ *
+ * No PHY answers on this bus -- the MDIO register is RAM, so reads come back
+ * as the last command written (see tests/drivers/ethernet/mdio_agm). That is
+ * not a limitation here: the case this suite exists for is precisely "the PHY
+ * does not answer", which is why the reset/probe moved off the init thread and
+ * onto the monitor work.
+ */
+
+#include <zephyr/dt-bindings/pinctrl/agm-agrv2k-pinctrl.h>
+
+/ {
+	fake_intc: interrupt-controller {
+		compatible = "vnd,fake-intc";
+		interrupt-controller;
+		#interrupt-cells = <2>;
+	};
+
+	agm_pinctrl: pinctrl {
+		compatible = "agm,agrv2k-pinctrl";
+		status = "okay";
+
+		eth0_default: eth0_default {
+			agm,pins = <AGM_PINCTRL(4, 0, AGM_PINCTRL_OUTPUT)>,
+				   <AGM_PINCTRL(4, 0, AGM_PINCTRL_INPUT)>;
+		};
+	};
+
+	eth_agm0: ethernet@41040000 {
+		compatible = "agm,agrv2k-emac";
+		reg = <0x41040000 0x28>;
+		interrupts = <12 1>;
+		interrupt-parent = <&fake_intc>;
+		agm,ahb-clkenable-bit = <3>;
+		agm,ahb-reset-bit = <3>;
+		phy-connection-type = "rmii";
+		/* The MAC follows the PHY that answers (phy1), which is how the
+		 * suite proves the driver-level link bridge: a fake link-up must
+		 * move the net_if carrier without any application glue. */
+		phy-handle = <&phy1>;
+		local-mac-address = [02 00 5A 5A 00 03];
+		pinctrl-0 = <&eth0_default>;
+		pinctrl-names = "default";
+		status = "okay";
+
+		mdio0: mdio {
+			compatible = "agm,agrv2k-mdio";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+
+			phy0: ethernet-phy@1 {
+				compatible = "microchip,lan8720";
+				reg = <1>;
+				status = "okay";
+			};
+
+			/* A second PHY, at prtad 2, that the model *does* answer:
+			 * phy0 is the "nothing on the bus" instance, phy1 is the
+			 * one whose ID, autoneg and link transitions the suite drives.
+			 * Two instances because the probe runs once, from the monitor
+			 * work's first pass, i.e. before any test can change the
+			 * model's mind. */
+			phy1: ethernet-phy@2 {
+				compatible = "microchip,lan8720";
+				reg = <2>;
+				status = "okay";
+			};
+		};
+	};
+};

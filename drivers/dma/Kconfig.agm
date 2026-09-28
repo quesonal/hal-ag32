@@ -1,0 +1,10 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config DMA_AGM
+	bool "AGM AgRV2K DMA driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_DMA_ENABLED
+	help
+	  Enable the PL080/LPC23xx-GPDMA-style DMA controller driver
+	  for the AGM AgRV2K SoC.

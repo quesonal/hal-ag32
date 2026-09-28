@@ -1,0 +1,32 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * The counter side of GPTIMER0: the same block the PWM suite programs, with
+ * the counter binding instead of the PWM one (the two drivers are mutually
+ * exclusive on an instance, so using one here is the point). The IRQ number is
+ * native_sim's range, not the SoC's (PLIC 19 for GPTIMER0).
+ */
+
+/ {
+	fake_intc: interrupt-controller {
+		compatible = "vnd,fake-intc";
+		interrupt-controller;
+		#interrupt-cells = <2>;
+	};
+
+	fake_clk: clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+	};
+
+	gptimer_counter0: counter@40020000 {
+		compatible = "agm,agrv2k-gptimer";
+		reg = <0x40020000 0x1000>;
+		interrupts = <11 1>;
+		interrupt-names = "gptimer";
+		interrupt-parent = <&fake_intc>;
+		clocks = <&fake_clk>;
+		agm,apb-clkenable-bit = <16>;
+		status = "okay";
+	};
+};

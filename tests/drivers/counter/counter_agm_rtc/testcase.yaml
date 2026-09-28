@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.counter.counter_agm_rtc.native:
+    platform_allow:
+      - native_sim
+    tags:
+      - counter
+      - hal_ag32

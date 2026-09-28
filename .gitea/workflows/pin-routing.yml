@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+name: pin routing
+
+# Gitea Actions (this repository lives on a gitea instance; the syntax is the
+# GitHub Actions one). The file is inert until an act_runner is registered --
+# until then it is the *definition* of the gate, run by hand or from a
+# pre-push hook:
+#
+#     tools/check_pin_routing.sh
+#
+# What runs here needs no Zephyr tree, no SDK and no build, so it is seconds
+# long: the AF table against its own rules, the committed pinctrl fragments
+# against the pin lists they are generated from, and tools/tests (which drive
+# the parsers against the vendor fixture in tools/tests/fixtures/).
+#
+# The half of the gate that needs a *built* devicetree or a bitstream netlist
+# stays a developer step, because it needs a west workspace and a build:
+#
+#     tools/check_pin_routing.sh --dts <build>/zephyr/zephyr.dts \
+#                                --netlist <build>/logic/board.vx
+#
+# `runs-on` is the act_runner label: self-hosted runners often expose
+# `ubuntu-latest` as well, but adjust it to whatever this instance registers.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: dependencies
+        run: python3 -m pip install --quiet --disable-pip-version-check pyyaml
+      - name: pin-routing gate
+        run: tools/check_pin_routing.sh

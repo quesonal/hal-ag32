@@ -1,0 +1,30 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * TIMER0 (0x4001e000): the dual 32-bit SP804 the counter driver models as two
+ * alarm channels. IRQ number is native_sim's range (the SoC's is PLIC 17).
+ */
+
+/ {
+	fake_intc: interrupt-controller {
+		compatible = "vnd,fake-intc";
+		interrupt-controller;
+		#interrupt-cells = <2>;
+	};
+
+	fake_clk: clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+	};
+
+	timer_counter0: counter@4001e000 {
+		compatible = "agm,agrv2k-timer";
+		reg = <0x4001e000 0x1000>;
+		interrupts = <12 1>;
+		interrupt-names = "timer";
+		interrupt-parent = <&fake_intc>;
+		clocks = <&fake_clk>;
+		agm,apb-clkenable-bit = <14>;
+		status = "okay";
+	};
+};

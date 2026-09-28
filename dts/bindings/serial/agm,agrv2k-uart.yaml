@@ -1,0 +1,50 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+title: AgRV2K UART
+
+description: |
+  On-die UART (uart0 @ 0x40025000) on AGM AgRV2K SoCs, served by the
+  native driver in this module (drivers/serial/uart_agm.c).
+
+  The IP is register-compatible with ARM PL011 (DR / RSR / FR / IBRD /
+  FBRD / LCR_H / CR / IMSC / RIS / MIS / ICR), so this binding inherits
+  the upstream property surface from arm,pl011.yaml and adds nothing
+  of its own. The vendor compatible exists for one reason:
+  DT_HAS_<COMPAT>_ENABLED is derived from the devicetree, so dropping
+  "arm,pl011" from the node makes CONFIG_UART_PL011 (which depends on
+  DT_HAS_ARM_PL011_ENABLED || DT_HAS_ARM_SBSA_UART_ENABLED, and is
+  "default y") unconfigurable on AGM boards. Keeping "arm,pl011" as
+  an additional compatible would leave that option selectable and let
+  two drivers instantiate the same node — a duplicate-device failure
+  that Kconfig can no longer stop.
+
+  Pin routing is separate from the electrical attributes: pinctrl-0
+  carries the alternate-function route (bank/bit of the TX and RX pins,
+  AGM_PINCTRL() cells), which pinctrl_configure_pins() turns into AFSEL +
+  DIR writes. Pull/drive settings are NOT runtime registers on this SoC —
+  the bitstream's ASF owns them, so this binding accepts no
+  bias-pull-*/drive-strength at all.
+
+compatible: "agm,agrv2k-uart"
+
+include: ["arm,pl011.yaml"]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  clocks:
+    required: true
+
+  agm,apb-clkenable-bit:
+    type: int
+    required: true
+    description: |
+      Bit index in SYS.APB_CLKENABLE (0x03000000 + 0x60) that gates this
+      UART's APB clock. The block is closed at reset, so SoC bring-up
+      opens it before the first register access (see soc/agm/agrv2k/soc.c
+      and the same convention in the CAN/I2C/GPTIMER drivers).

@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.ethernet.phy_agm_lan8720.native:
+    platform_allow:
+      - native_sim
+    tags:
+      - ethernet
+      - phy
+      - hal_ag32

@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Generated from openocd.cfg.in by the per-board board.cmake.
+# DO NOT EDIT BY HAND — your changes will be overwritten on the next
+# `west build` configure step.
+#
+# Source-of-truth: boards/agm/agrv2k/shared/support/openocd.cfg.in
+# Parameters (substituted by cmake configure_file @ONLY):
+#   @FLASH_SIZE@       on-die FLASH size              (set per-board)
+#   @BITSTREAM_ADDR@   FPGA bitstream FLASH address    (set per-board)
+
+# --- Locate AgRV SDK (AgRV_pio PlatformIO install) -----------------
+if { [info exists ::env(AGRV_SDK_PATH)] } {
+	set _AGRV_SDK $::env(AGRV_SDK_PATH)
+} else {
+	set _AGRV_SDK $::env(HOME)/AgRV_pio
+}
+set _AGRV_CFG [file join $_AGRV_SDK platforms/AgRV/etc/agrv2k.cfg]
+if { ![file exists $_AGRV_CFG] } {
+	error "AgRV SDK cfg not found at $_AGRV_CFG; set AGRV_SDK_PATH (or install PlatformIO agrv platform)"
+}
+
+# --- Board-specific overrides --------------------------------------
+set FLASH_SIZE       @FLASH_SIZE@
+set BITSTREAM_ADDR   @BITSTREAM_ADDR@
+
+# ADAPTER_OFFLINE must NOT be set when sourcing the SDK cfg: it uses
+# `[info exists ADAPTER_OFFLINE]` (not `[info exists ...] && $...`),
+# so any value — including 0 — triggers its `adapter init; return`
+# early-exit branch. That branch is BEFORE the proc definitions for
+# check_device_id / check_logic / rtt_start / is_read_protected, so
+# our --cmd-pre-load invocations of those procs would fail with
+# "invalid command name".
+#
+# Without ADAPTER_OFFLINE the SDK cfg runs the FULL init sequence
+# AND defines all the helper procs. The upstream OpenOcdBinaryRunner
+# issues its own `-c init` after our pre-load commands; double-init
+# is harmless (init is idempotent on already-examined targets).
+if { [info exists ADAPTER_OFFLINE] } { catch {unset ADAPTER_OFFLINE} }
+
+# Allow AGRV_ADAPTER env var to pick cmsis-dap / ftdi without editing
+# the cfg (SDK cfg's own $ADAPTER env var override takes priority if set).
+if { [info exists ::env(AGRV_ADAPTER)] && ![info exists ADAPTER] } {
+	set ADAPTER $::env(AGRV_ADAPTER)
+}
+
+# --- SWD clock ------------------------------------------------------
+# The SDK cfg defaults _ADAPTER_SPEED_HI to 15000 kHz and, for CMSIS-DAP,
+# uses that for the *initial* speed as well, so every SWD access happens at
+# ~14.3 MHz (the probe quantises 15000 to 14285 kHz). The vendor's own
+# PlatformIO flow passes `variable ADAPTER_SPEED 10000` instead, and on this
+# board that difference decides whether a session works at all: at
+# 14285 kHz AP accesses come back as "stalled AP operation" -- openocd init
+# fails and *every* later command is dropped -- while 10 MHz examines and
+# flashes the same target.
+#
+# Default to the vendor's 10 MHz; override with AGM_SWD_SPEED=<kHz> when a
+# dev board wants to probe the margin deliberately.
+if { [info exists ::env(AGM_SWD_SPEED)] } {
+	set ADAPTER_SPEED $::env(AGM_SWD_SPEED)
+}
+if { ![info exists ADAPTER_SPEED] } {
+	set ADAPTER_SPEED 10000
+}
+
+# --- Source the SDK cfg --------------------------------------------
+# SDK cfg does adapter selection (source interface/$ADAPTER.cfg),
+# target/DAP creation, flash bank definitions, CSR hiding, examine-end
+# event hooks, helper procs (check_device_id, check_logic, rtt_start,
+# is_read_protected, flash_size, ap_reg/apa/apd, ...).
+#
+# For CMSIS-DAP we need to force the bulk backend BEFORE the SDK cfg
+# runs `init` (line 360 of agrv2k.cfg). openocd rejects `cmsis-dap
+# backend` after `init`. The `cmsis-dap` Tcl command is registered by
+# sourcing interface/cmsis-dap.cfg; the SDK cfg does that on its own
+# line 29, but that's after we'd already need the switch. So we
+# source the interface cfg here ourselves, do the backend switch,
+# then let the SDK cfg re-source it (idempotent) and proceed.
+if { [info exists ADAPTER] && $ADAPTER == "cmsis-dap" } {
+	source [find interface/cmsis-dap.cfg]
+	cmsis-dap backend usb_bulk
+}
+
+source $_AGRV_CFG

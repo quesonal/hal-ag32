@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.ethernet.mdio_agm.native:
+    platform_allow:
+      - native_sim
+    tags:
+      - ethernet
+      - mdio
+      - hal_ag32

@@ -1,0 +1,29 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Devicetree for the native CRC suite: the real block address (0x41002000)
+ * and the real binding. The AHB gate/reset bits are what the devicetree
+ * carries on a board (soc.c applies them); nothing applies them here, which is
+ * fine because the register window is RAM. No interrupts, no pinctrl.
+ */
+
+/ {
+	/* How the driver gets enabled, and the same chain samples/crc_agm uses
+	 * on the board: the `zephyr,crc` chosen node turns on
+	 * CONFIG_CRC_HW_HANDLER, which selects CONFIG_CRC_DRIVER, which is what
+	 * the module's zephyr/Kconfig gates drivers/crc/Kconfig.agm on. Setting
+	 * CONFIG_CRC_AGM=y directly does nothing (Kconfig reports
+	 * "assigned the value 'y' but got the value 'n', unsatisfied dependency
+	 * CRC_DRIVER"), so the suite drives it the documented way -- and
+	 * therefore also covers that a chosen node is enough. */
+	chosen {
+		zephyr,crc = &crc_agm0;
+	};
+
+	crc_agm0: crc@41002000 {
+		compatible = "agm,agrv2k-crc";
+		reg = <0x41002000 0x100>;
+		agm,ahb-clkenable-bit = <2>;
+		agm,ahb-reset-bit = <2>;
+		status = "okay";
+	};
+};

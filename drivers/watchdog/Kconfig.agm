@@ -1,0 +1,25 @@
+# AGM AgRV2K watchdog configuration options
+#
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config WDT_AGRV2K
+	bool "AGM AgRV2K system watchdog (WDOG0) driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_WDT_ENABLED
+	help
+	  Enable the SP805-style system watchdog (WDOG0 @ 0x40011000)
+	  on AGM AgRV2K SoCs. The 32-bit countdown runs at pclk;
+	  timeouts can reset the SoC and/or raise a PLIC interrupt
+	  (single timeout channel, as in the SDK watchdog.h).
+
+config WDT_AGRV2K_IWDG
+	bool "AGM AgRV2K independent watchdog (IWDG) driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_IWDG_ENABLED
+	help
+	  Enable the backup-domain independent watchdog (IWDG, vendor
+	  SDK framework-agrv_sdk/src/iwdg.h). 16-bit register at RTC
+	  base + 0x34, clocked by LSI (internal 32 kHz) or LSE
+	  (32768 Hz crystal) through 8 prescaler taps. No PLIC IRQ
+	  (reset-only); feeds write the key 0xa000.

@@ -1,0 +1,19 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Marker for the "the boot record was already corrupt when this image booted"
+ * scenario (testcase.yaml, `drivers.misc.boot_agm_smp.api_corrupt_record`).
+ *
+ * The driver reads the boot record once, in boot_agm_init() (POST_KERNEL,
+ * CONFIG_BOOT_AGM_INIT_PRIORITY), so the corrupt half of its "no usable
+ * record" branch can only be reached from a boot whose flash already holds
+ * bad bytes -- nothing the tests can do at runtime produces it. This node is
+ * what tells the suite to sabotage the record one init priority earlier, and
+ * it is deliberately the only difference from app.overlay.
+ *
+ * No binding: it carries no properties, only its existence.
+ */
+
+/ {
+	corrupt_record: corrupt-record {
+	};
+};

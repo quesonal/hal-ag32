@@ -1,0 +1,64 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  PWM output channels on the AGM AgRV2K general-purpose timers
+  (GPTIMER0-4). Reuses the same hardware IP as the counter driver
+  (`agm,agrv2k-gptimer`); the two drivers are mutually exclusive
+  on a given instance (the PWM driver claims the timer at init).
+
+  The hardware is STM32-style: a free-running 32-bit up-counter
+  with auto-reload (ARR), prescaler (PSC) and four capture/compare
+  channels. Each PWM channel maps to one CCx output and one CCRx
+  register. Output polarity is via CCER.CCxP; complementary outputs
+  and dead-time (BDTR.MOE/DTG) are not yet exposed (v1 single-ended
+  only).
+
+  Physical pin output requires:
+    1. The SoC-level AFSEL bit (in GPIOx + 0x420) is set for the
+       pin group (this is the same bit set in soc.c for UART and
+       I2C; the PWM driver does NOT touch AFSEL itself).
+    2. The FPGA bitstream (board.ve) routes the timer's CCx output
+       to a real pin on the L100 fabric.
+
+  Without (2) the registers are programmed correctly and CCxIF
+  fires on time, but the pin never toggles — the bitstream
+  decision is board-level and tracked separately
+  follow-ups.
+
+compatible: "agm,agrv2k-gptimer-pwm"
+
+include: [pwm-controller.yaml, base.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  clocks:
+    required: true
+    description: |
+      SYSCLK feed for this block. PBUS_DIVIDER resets to 0, so pclk == SYSCLK:
+      reference the board's clk0 fixed-clock instead of copying the number --
+      the driver reads it with DT_INST_PROP_BY_PHANDLE(n, clocks,
+      clock_frequency), exactly like the UART and CAN drivers. A board that
+      changes SYSCLK only edits &clk0.
+  agm,apb-clkenable-bit:
+    type: int
+    required: true
+    description: |
+      Bit index in SYS.APB_CLKENABLE (0x03000000 + 0x60) gating this
+      instance's APB clock (16..20 for GPTIMER0..4, SDK APB_MASK_GPTIMERx).
+      SoC bring-up opens it from here, so a board that uses a timer only as
+      a PWM source does not need the counter node enabled to get a clock.
+    description: |
+      Frequency (Hz) of the APB/PBUS clock feeding the timer core
+      (the counter count rate). The shipped 407 bitstream runs the
+      timer clock at 200 MHz (pclk == SYSCLK; ).
+
+  "#pwm-cells":
+    const: 3
+
+pwm-cells:
+  - channel
+  - period
+  - flags

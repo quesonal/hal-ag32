@@ -1,0 +1,55 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Devicetree for the native SPI suite: the real controller address
+ * (0x40012000 = SPI0), the real binding, and a real AGM pinctrl state (the
+ * SPI0 pins, shaped like dts/riscv/agm/agrv2k.dtsi's spi0_default).
+ *
+ * `dmas` is deliberately absent: without it the driver's streaming paths
+ * return -ENOTSUP, which is the documented "no DMA on this node" behaviour and
+ * one of the things this suite pins. The IRQ number is native_sim's range, not
+ * the SoC's (PLIC 5): nothing fires here and the controller has 32 lines.
+ */
+
+#include <zephyr/dt-bindings/pinctrl/agm-agrv2k-pinctrl.h>
+
+/ {
+	fake_intc: interrupt-controller {
+		compatible = "vnd,fake-intc";
+		interrupt-controller;
+		#interrupt-cells = <2>;
+	};
+
+	fake_clk: clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+	};
+
+	agm_pinctrl: pinctrl {
+		compatible = "agm,agrv2k-pinctrl";
+		status = "okay";
+
+		spi0_default: spi0_default {
+			agm,pins = <AGM_PINCTRL(0, 0, AGM_PINCTRL_OUTPUT)>,
+				   <AGM_PINCTRL(0, 1, AGM_PINCTRL_INPUT)>,
+				   <AGM_PINCTRL(0, 2, AGM_PINCTRL_OUTPUT)>;
+		};
+	};
+
+	spi_agm0: spi@40012000 {
+		compatible = "agm,agrv2k-spi";
+		reg = <0x40012000 0x100>;
+		interrupts = <8 1>;
+		interrupt-names = "spi";
+		interrupt-parent = <&fake_intc>;
+		clocks = <&fake_clk>;
+		agm,apb-clkenable-bit = <2>;
+		pinctrl-0 = <&spi0_default>;
+		pinctrl-names = "default";
+		/* Required by spi-controller.yaml (the node is a bus); the board's
+		 * node carries them for its child flash devices. */
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+	};
+};

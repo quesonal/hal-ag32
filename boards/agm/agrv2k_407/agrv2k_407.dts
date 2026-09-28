@@ -1,0 +1,184 @@
+/*
+ * Copyright (c) 2026 AgRV Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * AGM AgRV2K 407 board device tree.
+ *
+ * Memory map (board-specific sizes override SoC defaults):
+ *   FLASH (XIP): 0x80000000, 1 MB
+ *   SRAM:        0x20000000, 128 KB
+ *
+ * Pin mux is configured by the on-die FPGA bitstream (board.ve) — this
+ * .dts file only declares runtime electrical attributes (pull, drive).
+ *
+ * Clock configuration -- three defines, each of which has to agree with the
+ * bitstream that is flashed:
+ *   AGM_SYSCLK_HZ     = 200 MHz  → clk0 (UART/CAN/timers/PWM/WDT/I2C and the
+ *                                  sys controller's SCLK divider math) + cpu0
+ *                                  (kernel tick); this is the bitstream's SYSCLK
+ *   AGM_HSE_HZ        = 8 MHz    → the on-board crystal (pins hseclk-frequency)
+ *   AGM_FLASH_MAX_HZ  = 100 MHz  → firmware-side SPI NOR ceiling, a divider of
+ *                                  SYSCLK (divider = (200-1)/100 = 1)
+ *
+ * The development-phase canonical bitstream
+ * (samples/bitstreams/example_board.bin, FCB at 0x800e7000)
+ * programs the silicon PLL to 200 MHz -- and its .ve/.v are the pair
+ * checked in as tools/tests/fixtures/example_board.*. A mismatch shows up as:
+ *   - sys_clock / k_msleep wall time drift (cpu0 != the bitstream's SYSCLK)
+ *   - PL011 IBRD/FBRD off → garbled UART (clk0 != the bitstream's SYSCLK)
+ *   - FLASH timing over the IP limit (sys::flash-max-frequency too high)
+ *
+ * To use a different SYSCLK: rebuild the bitstream from this board's pin map
+ * (`west build -t logic` → Quartus → `west build -t bitstream`) and
+ * update these three defines to match.
+ */
+
+/dts-v1/;
+#include <mem.h>
+#include <agm/agrv2k.dtsi>
+#include <agm/agrv2k-pins.dtsi>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <agm/agrv2k-board.dtsi>
+
+/* SYSCLK is one number per board. clk0 feeds every peripheral
+ * (UART/CAN/timers/PWM/WDT/I2C take it through the `clocks`
+ * phandle) and the sys controller reads the same phandle for its
+ * SCLK divider math, so a rate change is these three defines (SYSCLK /
+ * HSE / FLASH_MAX, + the matching bitstream). cpu0 must stay a literal: the
+ * kernel
+ * timer's Kconfig reads it as an integer. */
+#define AGM_SYSCLK_HZ    200000000
+#define AGM_FLASH_MAX_HZ 100000000
+#define AGM_HSE_HZ         8000000
+
+/ {
+	model = "AGM AgRV2K 407 board (L100, 200 MHz SYSCLK / 100 MHz BUSCLK)";
+	compatible = "agm,agrv2k_407";
+
+	aliases {
+		/* Legacy "the CAN controller" alias, still used by a few
+		 * upstream samples/scripts. */
+		can = &can0;
+	};
+
+	chosen {
+		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
+		/* Default CAN controller. Upstream tests/drivers/can/{api,
+		 * timing} and the CAN shell resolve their device through
+		 * DT_CHOSEN(zephyr_canbus); without it they do not build for
+		 * this board. Only the 407 enables can0 (see agrv2k.dtsi and
+		 * the per-board dts files), so this stays board-level rather
+		 * than going into the shared dtsi. */
+		zephyr,canbus = &can0;
+		zephyr,flash = &flash0;
+		zephyr,sram = &sram0;
+		/* XIP code lives in FLASH. Without this, CONFIG_XIP=y has
+		 * no effect: the linker has no ROM region to put .text in,
+		 * so all segments stay in SRAM (and the AgRV2K ROM
+		 * bootloader does not copy SRAM-execution images from FLASH,
+		 * leaving the CPU stuck on the first .data access). */
+		zephyr,code-partition = &flash0;
+	};
+
+	/* flash0 (on-die 1 MB here, 256 KB on the 103/303/test boards) comes
+	 * from dts/riscv/agm/agrv2k.dtsi: the array sits under the flash
+	 * controller node so both the XIP view and the driver's program/erase
+	 * path describe the same hardware. 4 KB erase pages, matching
+	 * `flash erase_address pin` in AgRV_pio's openocd flow. The other
+	 * three boards override the size.
+	 */
+
+	sram0: memory@20000000 {
+		compatible = "mmio-sram";
+		reg = <0x20000000 DT_SIZE_K(128)>;
+	};
+};
+
+/* UART0 — board console.
+ *
+ * Pins PIN_68 (TX) / PIN_69 (RX) are routed to GPIO7 bit 6 / GPIO6 bit 1
+ * by the FPGA bitstream, with the AFSEL register at GPIOx + 0x420. soc.c
+ * sets the AFSEL bits at PRE_KERNEL_1 (uart_route_pins_to_af). Here we
+ * only configure its protocol parameters:
+ *
+ *   (baud clock)                — the PL011 driver takes its clock from the
+ *                                 `clocks` phandle (clk0), not from a
+ *                                 clock-frequency property here: at the
+ *                                 200 MHz in AGM_SYSCLK_HZ and 115200 baud it
+ *                                 computes IBRD=108 FBRD=33.
+ *   current-speed   = 115200    — initial baud rate.
+ *   parity          = "none"    — no parity bit.
+ *   stop-bits       = "1"       — 1 stop bit.
+ *   data-bits       = 8         — 8 data bits per frame.
+ *
+ * NO pinctrl node: on AgRV2K the pull-up/down and drive strength of every
+ * pin are baked into the FPGA bitstream (ASF: WEAK_PULL_UP_RESISTOR /
+ * CURRENT_STRENGTH) and are NOT runtime registers. The (deleted)
+ * uart0_default { bias-pull-up;
+ * drive-strength = "8mA"; } group had no binding and no consumer, i.e. it
+ * was documentation that lied. If PIN_69 needs a weak
+ * pull-up, set it in the bitstream.
+ */
+&uart0 {
+	status = "okay";
+	current-speed = <115200>;
+	parity = "none";
+	stop-bits = "1";
+	data-bits = <8>;
+};
+
+/* PL011/CAN/timer/PWM/WDT/I2C clock parent — one value for the whole board
+ * (AGM_SYSCLK_HZ above), read through the `clocks` phandle. Must match the
+ * bitstream's actual SYSCLK. */
+&clk0 {
+	clock-frequency = <AGM_SYSCLK_HZ>;
+};
+
+/* The bitstream is rendered from these two numbers (board.ve's
+ * SYSCLK/HSECLK lines), so the pin map declares them from the same
+ * defines — one place to edit. generate_board_ve.py fails if they
+ * disagree with &clk0 / &cpu0. */
+&agrv2k_pins {
+	sysclk-frequency = <AGM_SYSCLK_HZ>;
+	hseclk-frequency = <AGM_HSE_HZ>;
+};
+
+/* CPU clock — overrides dtsi default 240 MHz to match the actual bitstream
+ * (example_board.bin programs the silicon PLL to 200 MHz). With this,
+ * sys_clock ticks line up with wall time and `k_msleep(1000)` returns
+ * in 1 s instead of 833 ms. */
+&cpu0 {
+	clock-frequency = <AGM_SYSCLK_HZ>;
+};
+
+/* CAN0 — on-die SJA1000-compatible CAN controller.
+ *
+ * CAN0_TX0 → PIN_39, CAN0_RX0 → PIN_38 (routed by the shipped
+ * example_board.ve). SELFTEST (loopback) mode still needs a bus the
+ * controller reads as idle: with the pins unloaded, RX0 floats
+ * dominant and the transmitter never starts (SR.TS stuck, no error
+ * counters). Keep a CAN transceiver (2x SN65HVD230 + peer) on the pins
+ * when running samples/can_loopback.
+ */
+&can0 {
+	status = "okay";
+	bitrate = <125000>;
+};
+
+/* USB0 UDC enablement — the zephyr_udc0 label is consumed by
+ * samples/subsys/usb/cdc_acm/app.overlay (the standard UDC + cdc-acm
+ * pairing). DP/DM are fixed-pin (PIN_70/71) so no pinctrl is needed;
+ * the bitstream provides the USB0
+ * device or OTG instance and 60 MHz PLLCLK1. */
+zephyr_udc0: &usb0 {
+	status = "okay";
+};
+
+/* FLASH controller ceiling (matches BUSCLK in board.ve). */
+&sys {
+	flash-max-frequency = <AGM_FLASH_MAX_HZ>;
+};

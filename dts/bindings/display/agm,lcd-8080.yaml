@@ -1,0 +1,55 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+title: AgRV2K GPIO-wired 8080 (MIPI DBI type A) LCD bus
+
+description: |
+  A parallel MCU-interface panel whose bus is driven by GPIOs: the AgRV2K has
+  no LCD controller, so a 16-bit 8080 bus is bit-banged from GPIO banks. Which
+  physical pin each GPIO bit lands on is decided by the FPGA bitstream
+  (board.ve), not by this node -- the pin map lives in the shared
+  `agm,agrv2k-pins` node.
+
+  This binding only describes the bus wiring; the panel controller's register
+  init belongs to the driver/sample that consumes it. Timing is deliberately
+  not modelled: the write pulse is stretched by software, so there is no
+  clock rate to declare.
+
+compatible: "agm,lcd-8080"
+
+properties:
+  data-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      DB0 .. DBn-1, low bit first (16 entries for the 16-bit mode the vendor
+      examples use: IM[2:0] = 110).
+
+  cs-gpios:
+    type: phandle-array
+    required: true
+    description: Chip select (active low).
+
+  rs-gpios:
+    type: phandle-array
+    required: true
+    description: Register select / DC -- 0 writes a command, 1 writes data.
+
+  wr-gpios:
+    type: phandle-array
+    required: true
+    description: Write strobe, active low (data is latched on the rising edge).
+
+  rd-gpios:
+    type: phandle-array
+    required: true
+    description: Read strobe, active low (the panel drives DB on read).
+
+  reset-gpios:
+    type: phandle-array
+    required: true
+    description: Panel RESET (active low).
+
+  backlight-gpios:
+    type: phandle-array
+    description: BL_CTR -- the adapter's backlight enable/PWM input.

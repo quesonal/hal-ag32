@@ -1,0 +1,28 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * USB0 at its real address (0x41001000) with the real binding: four
+ * bidirectional endpoints, full speed, and the AHB gate/reset bits the
+ * devicetree carries (soc.c applies them on a board; the window is RAM here).
+ * IRQ number is native_sim's range (the SoC's is PLIC 35).
+ */
+
+/ {
+	fake_intc: interrupt-controller {
+		compatible = "vnd,fake-intc";
+		interrupt-controller;
+		#interrupt-cells = <2>;
+	};
+
+	usb_agm0: usb@41001000 {
+		compatible = "agm,agrv2k-usb0";
+		reg = <0x41001000 0x1000>;
+		interrupts = <14 1>;
+		interrupt-names = "usb";
+		interrupt-parent = <&fake_intc>;
+		maximum-speed = "full-speed";
+		num-bidir-endpoints = <4>;
+		agm,ahb-clkenable-bit = <1>;
+		agm,ahb-reset-bit = <1>;
+		status = "okay";
+	};
+};

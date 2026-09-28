@@ -1,0 +1,1223 @@
+/*
+ * Copyright (c) 2026 AgRV Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * AgRV2K SoC device tree include.
+ *
+ * Interrupt topology (following the neorv32 model):
+ *   cpu0 ──► intc (riscv,cpu-intc, 1 cell)
+ *            │
+ *            └─► PLIC (sifive,plic-1.0.0, 2 cells)
+ *                ├─► uart0
+ *                ├─► gpio0..9
+ *                └─► ...
+ *
+ * CLINT (sifive,clint0) provides MTIME / MSIP / SSIP / STIP directly
+ * via interrupts-extended to the CPU's intc.
+ */
+
+#include <mem.h>
+#include <skeleton.dtsi>
+#include <zephyr/dt-bindings/pinctrl/agm-agrv2k-pinctrl.h>
+
+/ {
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			compatible = "riscv";
+			reg = <0>;
+			riscv,isa-base = "rv32i";
+			/* The A unit is present in the core, but the AHB fabric
+			 * doesn't bring exclusive transfers (LR/SC) back across
+			 * the bus -- they fault with mcause=5 / Load access fault
+			 * on 0x2000_xxxx (kernel slab in main RAM). Drop 'a' here
+			 * so arch/Kconfig auto-selects ATOMIC_OPERATIONS_C
+			 * (interrupt-locking emulation). */
+			riscv,isa-extensions = "m", "f", "c";
+			riscv,privilege-modes = "m", "u";
+			clock-frequency = <200000000>;
+			cpu-power-states = <&sleep_state &stop_state &standby_state>;
+			cpu0_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+			};
+		};
+	};
+
+	/* CPU power states — AG32 low-power modes
+	 *
+	 * Mapping to the AgRV SDK modes (framework-agrv_sdk/src/system.h /
+	 * system.c, SYS_EnterSleepMode / SYS_EnterStopMode /
+	 * SYS_EnterStandbyMode), implemented in soc/agm/agrv2k/pm.c:
+	 *
+	 *   suspend-to-idle = SYS_SLEEP_MODE   (PWR_CNTL 0b00): CPU clock
+	 *                    stops on WFI; all peripherals plus the CLINT
+	 *                    keep running, so the MTIP tick still wakes the
+	 *                    CPU and the tickless kernel resumes normally.
+	 *                    Any enabled interrupt wakes it.
+	 *   standby         = SYS_STOP_MODE    (PWR_CNTL 0b01): all clocks
+	 *                    stop. Only the EXT_INTx wake lines (routed by
+	 *                    board.ve) or the RTC alarm can wake it. The
+	 *                    shipped example_board.bin ties every EXT_INTx
+	 *                    to GND (boards/agm/agrv2k_407/board.ve), so
+	 *                    this state is disabled by default — enable it
+	 *                    only on a board whose bitstream provides a
+	 *                    wake source.
+	 *   soft-off        = SYS_STANDBY_MODE (PWR_CNTL 0b11): 1.2 V domain
+	 *                    powered down; wake is a power-on reset
+	 *                    (SYS_RSTF_LPWR). Same wake-source constraint.
+	 *
+	 * The Zephyr idle policy auto-selects only status-okay states
+	 * (suspend-to-idle here). The disabled deep states are force-only
+	 * (pm_state_force()), so a stock image can never drop into
+	 * stop/standby with no way to wake.
+	 */
+	power-states {
+		sleep_state: sleep {
+			compatible = "zephyr,power-state";
+			power-state-name = "suspend-to-idle";
+			min-residency-us = <2000>;
+			exit-latency-us = <10>;
+		};
+
+		stop_state: stop {
+			compatible = "zephyr,power-state";
+			power-state-name = "standby";
+			substate-id = <1>; /* SYS_STOP_MODE */
+			status = "disabled";
+			min-residency-us = <100000>;
+			exit-latency-us = <1000>;
+		};
+
+		standby_state: standby {
+			compatible = "zephyr,power-state";
+			power-state-name = "soft-off";
+			substate-id = <3>; /* SYS_STANDBY_MODE */
+			status = "disabled";
+			min-residency-us = <1000000>;
+			exit-latency-us = <1000>;
+		};
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		interrupt-parent = <&cpu0_intc>;
+
+		/* PLIC: 44 sources, 7 priority levels, 0x0C000000, 4 MB */
+		plic: interrupt-controller@c000000 {
+			compatible = "sifive,plic-1.0.0", "riscv,plic0";
+			reg = <0x0C000000 0x400000>;
+			riscv,max-priority = <7>;
+			riscv,ndev = <44>;
+			interrupts-extended = <&cpu0_intc 11>; /* MEIP */
+			interrupt-controller;
+			#address-cells = <0>;
+			#interrupt-cells = <2>; /* <irq priority> */
+			status = "okay";
+		};
+
+		/* CLINT: 64 KB at 0x02000000.
+		 * The mtimecmp registers live at 0x02004000+; we describe
+		 * the canonical 16 KB control region plus the mtimecmp
+		 * range via reg-names for the timer binding.
+		 */
+		clint: clint@2000000 {
+			compatible = "sifive,clint0";
+			reg = <0x02000000 0x10000>;
+			interrupts-extended =
+				<&cpu0_intc 3>, /* MSI soft  */
+				<&cpu0_intc 7>, /* MTIP       */
+				<&cpu0_intc 1>, /* SSIP       */
+				<&cpu0_intc 5>; /* STIP       */
+		};
+
+		/* RISC-V machine timer — MTIP-driven tick.
+		 *
+		 * Uses the upstream riscv_machine_timer driver; a
+		 * polling-mode timer (timer_poll.c + custom arch_cpu_idle) was
+		 * tried in its place and removed. The poll driver
+		 * only announced from the idle path, so ticks froze while
+		 * any thread ran without sleeping or yielding (the
+		 * "busy path" residual)
+		 *
+		 * MTIP is safe to use now that soc/agm/agrv2k/reset.S owns
+		 * the boot path: it keeps MTIE clear and mtimecmp
+		 * saturated until the upstream driver init (PRE_KERNEL_2)
+		 * arms a finite deadline and only then enables MTIE. The
+		 * The early-boot interrupt storm came from the shared
+		 * __initialize enabling MTIE before any driver had armed
+		 * mtimecmp (mtimecmp reset value 0 → MTIP always
+		 * pending), not from MTIP itself.
+		 *
+		 * MTIME @ 0x0200BFF8, MTIMECMP @ 0x02004000 (SiFive CLINT
+		 * layout, same as dts/riscv/shakti/ganga.dtsi).
+		 */
+		timer0: timer@200bff8 {
+			compatible = "riscv,machine-timer";
+			reg = <0x0200bff8 0x8 0x02004000 0x8>;
+			reg-names = "mtime", "mtimecmp";
+			interrupts-extended = <&cpu0_intc 7>;
+			status = "okay";
+		};
+
+		/* SYS controller (clocks / reset).
+		 *
+		 * clock-frequency       = SYSCLK after FCB PLL switch (Hz)
+		 * flash-max-frequency   = FLASH controller ceiling (Hz)
+		 *
+		 * Both are consumed by soc.c::agrv2k_clock_init at PRE_KERNEL_1
+		 * via DT_PROP(DT_NODELABEL(sys), ...).
+		 *
+		 * dtsi default 200/100 matches example_board.bin (the only
+		 * shipped bitstream as shipped): PLL × 25 from HSECLK 8
+		 * → SYSCLK 200, BUSCLK 100, soc.c programs divider=1 so FLASH
+		 * sees 100 MHz. Per-board .dts files override when their bitstream
+		 * is built at a different rate (agrv2k_103/303/test run at 100/
+		 * 200/100 MHz respectively).
+		 *
+		 * Note: if the bitstream is rebuilt at a different SYSCLK, all
+		 * three of cpu0::clock-frequency, sys::clock-frequency, and
+		 * clk0::clock-frequency must be updated to match — otherwise
+		 * sys_clock ticks drift (cpu0 mismatch), UART IBRD/FBRD is off
+		 * (clk0 mismatch), or the FLASH divider is wrong (sys mismatch).
+		 */
+		sys: sys-controller@3000000 {
+			compatible = "agm,agrv2k-sys", "syscon", "simple-mfd";
+			reg = <0x03000000 0x104>;
+			#clock-cells = <0>;
+			/* SYSCLK comes from clk0, so a board sets it once:
+			 *   &clk0 { clock-frequency = <...>; };
+			 * soc.c/pm.c read it through this phandle. */
+			clocks = <&clk0>;
+			flash-max-frequency = <100000000>;
+		};
+
+		/* A fixed-clock stub for PL011. The actual PL011 baud clock
+		 * is gated by the FPGA bitstream; this node just gives the
+		 * driver a fixed-clock phandle to bind against. The PL011
+		 * driver reads clock-frequency via DT_INST_PROP_BY_PHANDLE
+		 * on the `clocks` phandle, so per-board override MUST go on
+		 * this `clk0` node (not on the uart node). Frequency is
+		 * the SoC default; board.dts overrides via &clk0 { ... } to
+		 * match the bitstream's actual SYSCLK. If clk0 disagrees
+		 * with cpu0::clock-frequency, sys_clock ticks accurately but
+		 * UART IBRD/FBRD will be off — keep them aligned.
+		 *
+		 * Default 200 MHz matches example_board.bin (SYSCLK 200);
+		 * agrv2k_103/303/test override to 100/200/100.
+		 */
+		clk0: clock-controller {
+			compatible = "fixed-clock";
+			#clock-cells = <0>;
+			clock-frequency = <200000000>;
+		};
+
+		/* Pin controller — alternate-function routing.
+		 *
+		 * Which pin carries which signal is baked into the bitstream,
+		 * but the last step is a runtime register: the bank's AFSEL
+		 * bit decides whether the pin is driven by software (DATA) or
+		 * by the peripheral, and DIR decides whether the pin drives at
+		 * all. A state below lists those bank/bit pairs, so
+		 * pinctrl_configure_pins() (soc/agm/agrv2k/pinctrl.c) can set
+		 * them when the consumer calls pinctrl_apply_state().
+		 *
+		 * The state and uart0's pinctrl-0 MUST exist:
+		 * uart_agm.c::agm_uart_init() returns the error from
+		 * `pinctrl_apply_state(pcfg, PINCTRL_STATE_DEFAULT)` and
+		 * pinctrl_lookup_state() returns -ENOENT without a state; the
+		 * console device then fails to init and the UART stays at its
+		 * reset values (CR=0x300, LCRH=0, IBRD=0) — NO console output.
+		 *
+		 *
+		 * Electrical attributes (bias, drive strength) are NOT runtime
+		 * registers here — the bitstream's ASF owns them. Do not add
+		 * bias-pull-* /
+		 * drive-strength: the binding deliberately rejects them.
+		 *
+		 * Binding: dts/bindings/pinctrl/agm,agrv2k-pinctrl.yaml
+		 */
+		pinctrl: pinctrl {
+			compatible = "agm,agrv2k-pinctrl";
+
+			uart0_default: uart0_default {
+				/* Generated, like eth0_default below: the cells come from
+				 * dts/riscv/agm/pinctrl-default.dtsi (included at the end
+				 * of agrv2k-board.dtsi), which
+				 * tools/generate_pinctrl_dtsi.py renders from
+				 * agrv2k-pins.dtsi's UART0_UARTRXD/UART0_UARTTXD rows and
+				 * tools/agm_af_pins.yaml.
+				 *
+				 * Do not hand-write these: GPIO7 bit6 (the TX pin) is the
+				 * exact bit that was mislabelled as the MAC's RX_CLK on
+				 *and a wrong value here is silent (AFSEL hands
+				 * the pin to the wrong peripheral). tools/check_pinctrl.py
+				 * fails if this state and the pin list disagree.
+				 */
+				agm,pins = <>;
+			};
+
+			can0_default: can0_default {
+				/* SDK PERIPHERAL_CAN_ENABLE route: TX0 on
+				 * PIN_39 (GPIO8 bit 7), RX0 on PIN_38
+				 * (GPIO7 bit 3). Only meaningful when the
+				 * board enables can0 and its bitstream routes
+				 * this pair; do not enable it on a new board before
+				 * that routing exists. */
+				agm,pins = <>;  /* generated -- see pinctrl-default.dtsi */
+			};
+
+			/* I2C pins are open-drain: the bitstream wires them to the
+			 * I2C IP and AFSEL hands them over, but DIR stays as the
+			 * reset value -- the IP owns the pin direction, so these
+			 * cells use AGM_PINCTRL_NO_DIR. SDK PERIPHERAL_I2C_ENABLE:
+			 * I2C0 = GPIO3 bits 4 (SCL/PIN_35) and 5 (SDA/PIN_36),
+			 * I2C1 = bits 6/7. */
+			i2c0_default: i2c0_default {
+				agm,pins = <>;  /* generated -- see pinctrl-default.dtsi */
+			};
+
+			/* KEEP-HANDWRITTEN -- no bitstream routes I2C1 yet, so the
+			 * generator has nothing to emit for this state; the cells are
+			 * the AF table's values. Delete this block when a pin list
+			 * covers it. */
+			i2c1_default: i2c1_default {
+				agm,pins = <AGM_PINCTRL(3, 6, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(3, 7, AGM_PINCTRL_NO_DIR)>;
+			};
+
+			/*
+			 * MAC0 RMII pin handover (SDK PERIPHERAL_MAC_ENABLE_RMII):
+			 * the bitstream routes the pins, AFSEL is the runtime gate.
+			 *
+			 * The bank/bit of each MAC0 signal is SoC-fixed and lives in
+			 * tools/agm_af_pins.yaml -- do not copy the mapping into a
+			 * comment here. The version of this comment that used to sit
+			 * in this file said "MAC0_MDC bank 4, bit 5" (that is
+			 * SPI0_SCK/GPTIMER1_ETR; MDC is bank 9 bit 7) and it is what
+			 * sent the first MDIO bring-up at a GPIO that drives nothing.
+			 * tools/check_af_table.py re-reads the vendor header and
+			 * fails if the table drifts; tools/check_pinctrl.py fails if
+			 * a state disagrees with the table.
+			 *
+			 * Two facts that are *not* in the table, and belong here:
+			 * RMII uses TX_CLK as the REF_CLK port (the netlist wires
+			 * PIN_57_in to MAC0_TX_CLK), and this bitstream does not
+			 * expose MAC0_RX_CLK at all -- the vendor VE says not to
+			 * assign it in RMII, and GPIO7 bit 6 is this board's UART0
+			 * TX / PIN_68 (see uart0_default). A (7,6) cell in this
+			 * state would be a ghost.
+			 *
+			 * DIR: outputs for the TX-side signals, NO_DIR for pins the
+			 * IP tri-states or the PHY drives; MDIO is bidir (OUT+IN).
+			 */
+			eth0_default: eth0_default {
+				/* The agm,pins cells are GENERATED -- do not hand-write
+				 * them here. tools/generate_pinctrl_dtsi.py turns the pin
+				 * list of whichever sample/board overlay replaces
+				 * mcu-functions into dts/riscv/agm/pinctrl-<profile>.dtsi,
+				 * and that overlay includes it (which lands after this
+				 * file, so it overrides this empty property).
+				 *
+				 * The (bank,bit) of a function is fixed in silicon
+				 * (tools/agm_af_pins.yaml, from the SDK's AltaRiscv.h); the
+				 * fabric only chooses the pin, and its pin->GPIO fan-out is
+				 * many-to-many (PIN_57 feeds gpio7 bit5 and bit6), so these
+				 * tuples must NOT be inferred from the netlist.
+				 *
+				 * tools/check_pinctrl.py asserts that what lands here is
+				 * exactly what the pin list + AF table imply: missing,
+				 * extra and mislabelled cells all fail it. History: this
+				 * was a hand-written 10-cell list until it
+				 * had already drifted twice (MDC at (4,5), PIN_57 labelled
+				 * as RX_CLK, plus a ghost RX_CLK cell). See
+				 */
+				agm,pins = <>;
+			};
+
+			/* SPI0/SPI1 pin handover (SDK PERIPHERAL_SPI_ENABLE_ALL).
+			 * The bitstream routes the pins, AFSEL is the last step
+			 * that gives them to the SPI IP. The bank/bit of every
+			 * SPI signal is SoC-fixed and lives in
+			 * tools/agm_af_pins.yaml (verified against AltaRiscv.h by
+			 * tools/check_af_table.py) -- do not restate it here.
+			 *
+			 * AFSEL alone is not enough: with
+			 * DIR left at reset on the SI/WP#/HOLD# pins the engine
+			 * completes the phases (DONE=1, ERROR=0, phase registers
+			 * correct) but the flash answers nothing (RDID reads
+			 * 00 00 00), because MOSI never drives and a floating
+			 * HOLD# holds the die. The SDK's GPIO_AF_ENABLE() writes
+			 * AFSEL only and leaves DIR to the caller, exactly like it
+			 * does for UART TX (see pinctrl.c). So: SI + WP# + HOLD#
+			 * are outputs here, MISO (SO_IO1) stays an input, and the
+			 * IP supplies the quad-mode direction changes itself once
+			 * it owns those three pins.
+			 *
+			 * SPI1's pins (GPIO0_4..7) are not routed on any variant. */
+			spi0_default: spi0_default {
+				agm,pins = <>;  /* generated -- see pinctrl-default.dtsi */
+			};
+
+			/* SPI1 pin handover (SDK PERIPHERAL_SPI_ENABLE_ALL). Same
+			 * shape as SPI0 (bank/bit in tools/agm_af_pins.yaml). A
+			 * board whose bitstream routes SPI1 rather than SPI0 to
+			 * its SPI device uses this state. */
+			/* KEEP-HANDWRITTEN -- no bitstream routes SPI1 yet, so the
+			 * generator has nothing to emit for this state; the cells are
+			 * the AF table's values. Delete this block when a pin list
+			 * covers it. */
+			spi1_default: spi1_default {
+				agm,pins = <AGM_PINCTRL(4, 7, AGM_PINCTRL_OUTPUT)>,
+					   <AGM_PINCTRL(5, 0, AGM_PINCTRL_OUTPUT)>,
+					   <AGM_PINCTRL(0, 4, AGM_PINCTRL_OUTPUT)>,
+					   <AGM_PINCTRL(0, 5, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(0, 6, AGM_PINCTRL_OUTPUT)>,
+					   <AGM_PINCTRL(0, 7, AGM_PINCTRL_OUTPUT)>;
+			};
+
+			/* GPTIMER PWM outputs: CH0..3 of an instance land on four
+			 * consecutive bits of one bank -- that mapping and the
+			 * complementary CHNx family are in tools/agm_af_pins.yaml.
+			 * NO_DIR: the timer drives the pin, so only AFSEL is ours. A
+			 * board that wants some of these pins as GPIO trims its state;
+			 * the driver routes exactly what is listed, at init. */
+			/* KEEP-HANDWRITTEN -- no bitstream routes GPTIMER0 yet, so the
+			 * generator has nothing to emit for this state; the cells are
+			 * the AF table's values. Delete this block when a pin list
+			 * covers it. */
+			gpt0_pwm_default: gpt0_pwm_default {
+				agm,pins = <AGM_PINCTRL(1, 0, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(1, 1, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(1, 2, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(1, 3, AGM_PINCTRL_NO_DIR)>;
+			};
+
+			gpt1_pwm_default: gpt1_pwm_default {
+				agm,pins = <>;  /* generated -- see pinctrl-default.dtsi */
+			};
+
+			/* KEEP-HANDWRITTEN -- GPTIMER2's pins are not routed by any
+			 * bitstream, so the generator has nothing to emit for this
+			 * state; the cells are the AF table's values. Delete when a
+			 * pin list covers it. */
+			gpt2_pwm_default: gpt2_pwm_default {
+				agm,pins = <AGM_PINCTRL(2, 0, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(2, 1, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(2, 2, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(2, 3, AGM_PINCTRL_NO_DIR)>;
+			};
+
+			/* KEEP-HANDWRITTEN -- GPTIMER3's pins are not routed by any
+			 * bitstream, so the generator has nothing to emit for this
+			 * state; the cells are the AF table's values. Delete when a
+			 * pin list covers it. */
+			gpt3_pwm_default: gpt3_pwm_default {
+				agm,pins = <AGM_PINCTRL(2, 4, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(2, 5, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(2, 6, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(2, 7, AGM_PINCTRL_NO_DIR)>;
+			};
+
+			/* KEEP-HANDWRITTEN -- GPTIMER4's pins are not routed by any
+			 * bitstream, so the generator has nothing to emit for this
+			 * state; the cells are the AF table's values. Delete when a
+			 * pin list covers it. */
+			gpt4_pwm_default: gpt4_pwm_default {
+				agm,pins = <AGM_PINCTRL(3, 0, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(3, 1, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(3, 2, AGM_PINCTRL_NO_DIR)>,
+					   <AGM_PINCTRL(3, 3, AGM_PINCTRL_NO_DIR)>;
+			};
+		};
+
+		/* UART0 — ARM PL011 @ 0x40025000
+		 *
+		 * Real clock gating is done in the FPGA bitstream; we
+		 * still need a fixed-clock phandle here so the PL011
+		 * driver's CLOCK_INIT macro resolves. clk0 is a
+		 * fixed-clock stub.
+		 *
+		 * The compatible is deliberately not "arm,pl011": the node
+		 * is owned by hal_ag32's native UART driver
+		 * (drivers/serial/uart_agm.c, compatible "agm,agrv2k-uart"),
+		 * which uses DT_INST_IRQN_BY_IDX for the IRQ wiring (the
+		 * multi-level encoding required on RISC-V + PLIC). No SoC
+		 * needs the upstream driver. Listing
+		 * "arm,pl011" as well would leave CONFIG_UART_PL011
+		 * selectable and let two drivers instantiate this node.
+		 *
+		 * pinctrl-0 carries the actual pin route (the pin controller
+		 * node above); deleting it silences the console, and so does
+		 * removing agm,pins from the state.
+		 */
+		uart0: serial@40025000 {
+			compatible = "agm,agrv2k-uart";
+			reg = <0x40025000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <24 1>; /* PLIC IRQ 24, priority 1 */
+			interrupt-names = "uart"; /* uart_agm IRQ config iterates this */
+			clocks = <&clk0>;
+			pinctrl-0 = <&uart0_default>;
+			pinctrl-names = "default";
+			/* Both consumed by SoC bring-up: soc.c opens this gate
+			 * plus the gates of the banks the pinctrl state routes
+			 * through, so a board re-routes the console by editing
+			 * devicetree (APB_MASK_UART0 = bit 21). */
+			agm,apb-clkenable-bit = <21>; /* APB_MASK_UART0 */
+			status = "disabled";
+		};
+
+		/*
+		 * GPIO0..9 — Stellaris-style 8-bit banks (SDK AltaRiscv.h;
+		 * 10 banks).
+		 *
+		 *   bank n: GPIO_DATA[256] masked-write @ base, DIR +0x400,
+		 *   IS/IBE/IEV/IE/RIS/MIS/IC +0x404..0x41C, AFSEL +0x420
+		 *   (SDK gpio.h: AFSEL bit = peripheral alternate function;
+		 *    note the vanilla ti,stellaris-gpio driver treats IE as
+		 *    IM and clears it on enable — AgRV IE is inverted, the
+		 *    gpio_irq sample re-asserts it — quirk note).
+		 *   base  = 0x40014000 + n*0x1000
+		 *   PLIC  = 7 + n (GPIO0_IRQn..GPIO7_IRQn)
+		 *   APB   = 4 + n (SYS.APB_CLKENABLE bit). soc.c opens the
+		 *           gate of every bank that is status="okay", plus the
+		 *           banks named by a peripheral's *-afsel-pin (e.g.
+		 *           uart0's TX bank, which stays disabled as a GPIO
+		 *           device). Everything else stays closed until its
+		 *           driver opens it — measured at reset:
+		 *           APB_CLKENABLE = 0x00200d01 (FCB0 + GPIO4/6/7 +
+		 *           UART0 only).
+		 *
+		 * Package pin ↔ bank-bit routing is NOT fixed by the package:
+		 * the on-die FPGA bitstream (board.ve) chooses it per board —
+		 * pin names (PIN_xx) and pin capabilities are in
+		 * the pinout table, the per-board wiring in the
+		 * board .ve. Example (shared by the agrv2k_103/303/407/test
+		 * board.ve files): GPIO6_2/4/5/6 = PIN_23/24/29/30
+		 * (IO_Button1/2, IO_Switch1/2; switches need a bitstream
+		 * that routes them and conflict with DAC0/1).
+		 *
+		 * Banks are status="disabled" by default; the shared board
+		 * dtsi (dts/riscv/agm/agrv2k-board.dtsi) enables the two
+		 * banks every variant routes (gpio4 = LED1..4 on
+		 * PIN_51..54, gpio6 = buttons). GPIO0 is special:
+		 * its pins are shared with SPI0/SPI1 and no shipped bitstream
+		 * brings it out. GPIO3 (I2C0/1 pins) and GPIO7
+		 * (UART0 TX pin) are driven by their peripheral drivers /
+		 * soc.c AFSEL routing, so those nodes stay disabled here.
+		 */
+		gpio0: gpio@40014000 {
+			compatible = "ti,stellaris-gpio";
+			reg = <0x40014000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <7 1>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			status = "disabled";
+		};
+
+		gpio1: gpio@40015000 {
+			compatible = "ti,stellaris-gpio";
+			reg = <0x40015000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <8 1>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			status = "disabled";
+		};
+
+		gpio2: gpio@40016000 {
+			compatible = "ti,stellaris-gpio";
+			reg = <0x40016000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <9 1>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			status = "disabled";
+		};
+
+		gpio3: gpio@40017000 {
+			compatible = "ti,stellaris-gpio";
+			reg = <0x40017000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <10 1>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			status = "disabled";
+		};
+
+		gpio4: gpio@40018000 {
+			compatible = "ti,stellaris-gpio";
+			reg = <0x40018000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <11 1>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			status = "disabled";
+		};
+
+		gpio5: gpio@40019000 {
+			compatible = "ti,stellaris-gpio";
+			reg = <0x40019000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <12 1>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			status = "disabled";
+		};
+
+		gpio6: gpio@4001A000 {
+			compatible = "ti,stellaris-gpio";
+			reg = <0x4001A000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <13 1>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			status = "disabled";
+		};
+
+		gpio7: gpio@4001B000 {
+			compatible = "ti,stellaris-gpio";
+			reg = <0x4001B000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <14 1>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			status = "disabled";
+		};
+
+		/* GPIO8/GPIO9 — the AgRV2K GPIO block has 10 banks of 8
+		 * (8 banks of GPIO0..7 plus GPIO8, GPIO9 at 0x4001C000 /
+		 * 0x4001D000 per SDK AltaRiscv.h). Hardware use confirms it:
+		 * CAN0_TX0 is routed through GPIO8 AFSEL bit 7. Both banks
+		 * stay status="disabled"; a board / peripheral (CAN, see
+		 * hal_ag32's dts/bindings/can/agm,agrv2k-can.yaml)
+		 * references them by phandle and enables the AFSEL route
+		 * itself.
+		 */
+		gpio8: gpio@4001C000 {
+			compatible = "ti,stellaris-gpio";
+			reg = <0x4001C000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <15 1>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			status = "disabled";
+		};
+
+		gpio9: gpio@4001D000 {
+			compatible = "ti,stellaris-gpio";
+			reg = <0x4001D000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <16 1>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <8>;
+			status = "disabled";
+		};
+
+		/* USB0 — FSL/ChipIdea-like dual-role controller, device-only
+		 * driver (drivers/usb/udc/udc_agm.c). Register layout and
+		 * bit names mirror the SDK usb.h + TinyUSB agrv2k_dcd.c.
+		 *
+		 * Physical layer is wired by the FPGA bitstream:
+		 *   - DP/DM  = PIN_70/71  (fixed-pin, NOT in .ve)
+		 *   - xcvr_clk = 60 MHz from PLLCLK1
+		 *   - host/device/OTG mode is selected by the bitstream; for
+		 *     this driver the bitstream should be in USB0 device mode
+		 *     (or OTG with software override of USBMODE.CM).
+		 *
+		 * AHB clock gate is in SYS.AHB_CLKENABLE @ 0x03000000 + 0x70
+		 * (bit 1 = AHB_MASK_USB0 per AltaRiscv.h), deasserted in
+		 * soc/agm/agrv2k/soc.c step 4.
+		 */
+		usb0: usb@41001000 {
+			compatible = "agm,agrv2k-usb0";
+			reg = <0x41001000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <35 1>; /* USB0_IRQn = PLIC 35 */
+			maximum-speed = "full-speed";
+			num-bidir-endpoints = <4>;
+			agm,ahb-clkenable-bit = <1>;
+			agm,ahb-reset-bit = <1>;
+			status = "disabled";
+		};
+
+		/* USB0 in *host* mode (drivers/usb/uhc/uhc_agm.c).
+		 *
+		 * Same silicon, same registers, second devicetree node: a node
+		 * may only back one driver (see the device-mode node above), so
+		 * the role is picked by which of the two nodes an application
+		 * sets status = "okay". Both at 0x4100_1000 on purpose -- the
+		 * two are mutually exclusive, and only one is ever enabled.
+		 *
+		 * The host driver walks the EHCI operational registers:
+		 * ASYNCLISTADDR (0x158) for the control/bulk queue-head ring,
+		 * PERIODICLISTBASE (0x154) for the interrupt frame list, PORTSC
+		 * (0x184) for connect/reset/speed. DP/DM are the same fixed
+		 * pins (PIN_70/71) and the same 60 MHz PLLCLK1 xcvr clock as
+		 * the device mode; the bitstream has to be in USB0 host mode
+		 * (or OTG with software override of USBMODE.CM).
+		 *
+		 * AHB clock gate/reset are the device-mode node's bit 1
+		 * (SYS.AHB_CLKENABLE / SYS.AHB_RESET); soc.c opens both from
+		 * whichever of the two nodes is enabled.
+		 *
+		 * Disabled by default. Enable exactly one of usb0/uhc0.
+		 */
+		uhc0: uhc@41001000 {
+			compatible = "agm,agrv2k-uhc";
+			reg = <0x41001000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <35 1>; /* USB0_IRQn = PLIC 35 */
+			maximum-speed = "full-speed";
+			agm,ahb-clkenable-bit = <1>;
+			agm,ahb-reset-bit = <1>;
+			status = "disabled";
+		};
+
+		/* CRC calculation unit @ 0x4100_2000, in
+		 * the same AHB block as DMAC0 (0x4100_0000) and USB0
+		 * (0x4100_1000). STM32-CRC compatible register set:
+		 * DR/IDR/CR/INIT/POL, programmable polynomial size and seed,
+		 * byte/half-word/word input reversal, bit-level output
+		 * reversal.
+		 *
+		 * AHB domain, not APB: the clock gate is bit 2 of
+		 * SYS.AHB_CLKENABLE and the reset release bit 2 of
+		 * SYS.AHB_RESET (the vendor example calls
+		 * SYS_EnableAHBClock(AHB_MASK_CRC0)). soc.c opens both from
+		 * the two properties below.
+		 *
+		 * Disabled by default: an app that wants it enables the node
+		 * *and* points zephyr,crc at it, which is what turns on
+		 * Zephyr's CRC_HW_HANDLER (subsys/crc/crc_hardware.c then
+		 * routes crc32_ieee() to this driver). The loader does that in
+		 * samples/spi_boot_loader/boards/agrv2k_407.overlay.
+		 */
+		crc0: crc@41002000 {
+			compatible = "agm,agrv2k-crc";
+			reg = <0x41002000 0x100>;
+			agm,ahb-clkenable-bit = <2>;
+			agm,ahb-reset-bit = <2>;
+			status = "disabled";
+		};
+
+		/* RTC — backup-domain STM32F1-style RTC @ 0x40000000.
+		 *
+		 * 16-bit halfword registers at 4-byte stride, no APB
+		 * clock gate (the SDK has no APB_MASK_RTC). Exposed as
+		 * a counter device (agm,agrv2k-rtc): 32-bit up counter
+		 * ticking at ~1 Hz with the DT defaults (32768 Hz LSE,
+		 * PRL 32767) plus one alarm channel. The RTC keeps
+		 * running in stop/standby mode and is the only
+		 * board-level wake source for the deep states on
+		 * the shipped 407 bitstream (which ties every EXT_INTx
+		 * to GND).
+		 *
+		 * agm,rtc-source / agm,rtc-frequency / agm,prescaler
+		 * are board-level properties: the LSE crystal must be
+		 * present on the board (or switch to "lsi"/"local").
+		 */
+		rtc0: rtc@40000000 {
+			compatible = "agm,agrv2k-rtc";
+			reg = <0x40000000 0x100>;
+			interrupt-parent = <&plic>;
+			interrupts = <2 1>; /* PLIC IRQ 2, priority 1 */
+			status = "disabled";
+		};
+
+		/* On-die flash: the array is XIP-mapped at 0x8000_0000 (the
+		 * child `soc-nv-flash` node) while program/erase and the
+		 * option-byte window live in the controller at 0x4000_1000
+		 * (register layout in
+		 * the SDK's framework-agrv_sdk/src/flash.h).
+		 *
+		 * Erase granularity is 4 KiB (SDK FLASH_SECTOR_SIZE, and what
+		 * AgRV_pio's `flash erase_address pin` assumes); programming is
+		 * 32-bit. Driver: drivers/flash/flash_agm.c
+		 * (CONFIG_FLASH_AGM, selected by DT_HAS_..._ENABLED).
+		 *
+		 * The last 100 KiB (0x800e7000..) carries the fabric bitstream
+		 * and the running image sits at the front -- this node only
+		 * describes the hardware, the layout belongs to whoever writes
+		 * it.
+		 */
+		flash_controller: flash-controller@40001000 {
+			compatible = "agm,agrv2k-flash-controller";
+			reg = <0x40001000 0x1000>;
+			#address-cells = <1>;
+			#size-cells = <1>;
+			status = "okay";
+
+			flash0: flash@80000000 {
+				compatible = "soc-nv-flash";
+				reg = <0x80000000 DT_SIZE_M(1)>;
+				erase-block-size = <4096>;
+				write-block-size = <4>;
+				status = "okay";
+			};
+		};
+
+		/* IWDG — independent watchdog in the RTC backup domain.
+		 *
+		 * 16-bit register at RTC base + 0x34 (vendor SDK
+		 * framework-agrv_sdk/src/iwdg.h). No APB gate, no PLIC
+		 * IRQ (reset-only); counter clocked by LSI (internal
+		 * 32 kHz) or LSE (32768 Hz crystal) through 8 prescaler
+		 * taps (/2..256). Timeout = prescaler × vendor-fixed
+		 * reload count. "Feed" writes the key 0xa000.
+		 *
+		 * Drivers: drivers/watchdog/wdt_iwdg_agm.c. Disabled by
+		 * default — the IWDG is the only reset source that keeps
+		 * running in standby, so enabling it is an explicit board
+		 * decision. Boards pick the clock source via agm,clk-source
+		 * (lsi = no external crystal; lse = needs 32768 Hz on the
+		 * board's LSE pins).
+		 */
+		iwdg0: watchdog@40000034 {
+			compatible = "agm,agrv2k-iwdg";
+			reg = <0x40000034 0x2>;
+			agm,prescaler = <64>;       /* /64 -> ~2 s on LSI */
+			agm,clk-source = "lsi";     /* board-agnostic default */
+			agm,freeze-mode = "stop";   /* keep running in standby */
+			status = "disabled";
+		};
+
+		/* WDOG0 — SP805-style system watchdog @ 0x40011000.
+		 *
+		 * 32-bit countdown clocked at pclk (`clocks` -> clk0,
+		 * == SYSCLK 200 MHz on the shipped 407 bitstream), lock
+		 * register at 0xC00 (unlock key 0x1ACCE551), PLIC IRQ 4
+		 * and APB clock gate bit 1 (APB_MASK_WATCHDOG0). The
+		 * wdt driver exposes a single timeout channel; a missed
+		 * feed resets the SoC (RESEN) and/or raises the PLIC
+		 * interrupt (INTEN), see drivers/watchdog/wdt_agm.c.
+		 */
+		wdt0: watchdog@40011000 {
+			compatible = "agm,agrv2k-wdt";
+			reg = <0x40011000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <4 1>; /* PLIC IRQ 4, priority 1 */
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <1>; /* APB_MASK_WATCHDOG0 */
+			status = "disabled";
+		};
+
+		/* I2C0/1 — OpenCores-style I2C master controllers.
+		 * Pins: I2C0 SCL/SDA = GPIO3 bit 4/5 (PIN_35/36 on
+		 * agrv2k_407, routed by the FPGA bitstream); I2C1 = GPIO3
+		 * bit 6/7. The i2c0_default / i2c1_default pinctrl states set
+		 * the GPIO3 AFSEL bits (AGM_PINCTRL_NO_DIR cells).
+		 */
+		i2c0: i2c@4002b000 {
+			compatible = "agm,agrv2k-i2c";
+			reg = <0x4002b000 0x14>;
+			interrupt-parent = <&plic>;
+			interrupts = <30 1>; /* PLIC IRQ 30, priority 1 */
+			clock-frequency = <100000>;
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			/* Pin route + APB gate: I2C0's own gate, plus GPIO3's
+			 * bank gate opened by soc.c from i2c0_default. */
+			pinctrl-0 = <&i2c0_default>;
+			pinctrl-names = "default";
+			agm,apb-clkenable-bit = <27>; /* APB_MASK_I2C0 */
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		i2c1: i2c@4002c000 {
+			compatible = "agm,agrv2k-i2c";
+			reg = <0x4002c000 0x14>;
+			interrupt-parent = <&plic>;
+			interrupts = <31 1>; /* PLIC IRQ 31, priority 1 */
+			clock-frequency = <100000>;
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			pinctrl-0 = <&i2c1_default>;
+			pinctrl-names = "default";
+			agm,apb-clkenable-bit = <28>; /* APB_MASK_I2C1 */
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		/* SPI0 / SPI1 — phase-engine SPI controllers.
+		 *
+		 * One START runs up to eight TX/RX phases back to back inside a
+		 * single chip-select window, which is why the vendor calls the
+		 * IP "flash-oriented": the first phase must be TX, RX and TX
+		 * never overlap, and RX must be the last phase. See
+		 * drivers/spi/spi_agm.c (full-duplex and CPOL/CPHA need the
+		 * fabric patch).
+		 *
+		 * SPI0 is the boot/on-board flash controller: every board's
+		 * bitstream routes it to PIN_98/2/4/5 (+ WP#/HOLD# on
+		 * PIN_3/97) and the eval board carries an 8 MB SPI NOR there.
+		 * SPI1's pins (GPIO0_4..7) are not routed on any variant yet,
+		 * so its node stays disabled everywhere.
+		 *
+		 * SCLK = SYSCLK / 2..256: the driver picks the divider from
+		 * `clocks` and the requested frequency. APB gate bits are
+		 * SPI0 = 2, SPI1 = 3 (APB_MASK_SPIx); the pins come from the
+		 * shared `spi0_default` state above (GPIO0 + GPIO4 gates).
+		 */
+		spi0: spi@40012000 {
+			compatible = "agm,agrv2k-spi";
+			reg = <0x40012000 0x100>;
+			interrupt-parent = <&plic>;
+			interrupts = <5 1>; /* PLIC IRQ 5 (SPI0_IRQn) */
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			pinctrl-0 = <&spi0_default>;
+			pinctrl-names = "default";
+			agm,apb-clkenable-bit = <2>; /* APB_MASK_SPI0 */
+			/* DMA channels 6/5 (TX/RX), handshake requests 6/7
+			 * (SPI0_TX_DMA_REQ / SPI0_RX_DMA_REQ). */
+			dmas = <&dma0 6>, <&dma0 5>;
+			dma-names = "tx", "rx";
+			agm,tx-dma-request = <6>;
+			agm,rx-dma-request = <7>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		spi1: spi@40013000 {
+			compatible = "agm,agrv2k-spi";
+			reg = <0x40013000 0x100>;
+			interrupt-parent = <&plic>;
+			interrupts = <6 1>; /* PLIC IRQ 6 (SPI1_IRQn) */
+			clocks = <&clk0>;
+			pinctrl-0 = <&spi1_default>;
+			pinctrl-names = "default";
+			agm,apb-clkenable-bit = <3>; /* APB_MASK_SPI1 */
+			dmas = <&dma0 6>, <&dma0 5>;
+			dma-names = "tx", "rx";
+			agm,tx-dma-request = <8>; /* SPI1_TX_DMA_REQ */
+			agm,rx-dma-request = <9>; /* SPI1_RX_DMA_REQ */
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
+		/* DMAC0 — PL080/LPC23xx-GPDMA-style DMA controller with
+		 * 8 channels. Three PLIC lines: intr (combined), inttc
+		 * (terminal count), interr (error).
+		 */
+		dma0: dma@41000000 {
+			compatible = "agm,agrv2k-dma";
+			reg = <0x41000000 0x200>;
+			interrupt-parent = <&plic>;
+			interrupts = <32 1>, <33 1>, <34 1>;
+			interrupt-names = "intr", "inttc", "interr";
+			#dma-cells = <1>;
+			dma-channels = <8>;
+			/* AHB domain (like USB0): the clock gate and the reset
+			 * release are declared here and applied by soc.c at
+			 * PRE_KERNEL_1. */
+			agm,ahb-clkenable-bit = <0>; /* DMAC0 */
+			agm,ahb-reset-bit = <0>;
+			status = "disabled";
+		};
+
+		/* TIMER0/1 - SP804-style dual 32-bit timers.
+		 *
+		 * Each unit has two independent sub-timers (register
+		 * sets at +0x00 and +0x20) sharing one PLIC line:
+		 * TIMER0 @ 0x4001E000 / IRQ 17, TIMER1 @ 0x4001F000 /
+		 * IRQ 18. The counter driver (agm,agrv2k-timer) uses
+		 * sub-timer 1 as the count source (free-running) and
+		 * exposes both sub-timers as alarm channels. APB clock
+		 * gate bits 14/15 are declared per node below
+		 * (agm,apb-clkenable-bit) and opened by soc.c at
+		 * PRE_KERNEL_1.
+		 * Sub-timers count at pclk == SYSCLK (PBUS_DIVIDER reset
+		 * value 0, so SYS_GetPclkFreq() = SYSCLK); measured at
+		 * 200 MHz on the shipped 407 bitstream.
+		 */
+		tim0: timer@4001e000 {
+			compatible = "agm,agrv2k-timer";
+			reg = <0x4001e000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <17 1>; /* PLIC IRQ 17, priority 1 */
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <14>; /* APB_MASK_TIMER0 */
+			status = "disabled";
+		};
+
+		tim1: timer@4001f000 {
+			compatible = "agm,agrv2k-timer";
+			reg = <0x4001f000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <18 1>; /* PLIC IRQ 18, priority 1 */
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <15>; /* APB_MASK_TIMER1 */
+			status = "disabled";
+		};
+
+		/* GPTIMER0-4 - STM32-style general purpose timers.
+		 *
+		 * One counter + four capture/compare channels each;
+		 * only compare channel 0 is wired up by the counter
+		 * driver for now. GPTIMERx @ 0x4002[0-4]000 with
+		 * PLIC IRQs 19..23, APB clock gate bits 16..20.
+		 * Counters run at pclk == SYSCLK (see TIMER0/1 comment;
+		 * the shipped 407 bitstream runs it at 200 MHz).
+		 */
+		gpt0: timer@40020000 {
+			compatible = "agm,agrv2k-gptimer";
+			reg = <0x40020000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <19 1>; /* PLIC IRQ 19, priority 1 */
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <16>; /* APB_MASK_GPTIMER0 */
+			status = "disabled";
+		};
+
+		gpt1: timer@40021000 {
+			compatible = "agm,agrv2k-gptimer";
+			reg = <0x40021000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <20 1>; /* PLIC IRQ 20, priority 1 */
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <17>; /* APB_MASK_GPTIMER1 */
+			status = "disabled";
+		};
+
+		gpt2: timer@40022000 {
+			compatible = "agm,agrv2k-gptimer";
+			reg = <0x40022000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <21 1>; /* PLIC IRQ 21, priority 1 */
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <18>; /* APB_MASK_GPTIMER2 */
+			status = "disabled";
+		};
+
+		gpt3: timer@40023000 {
+			compatible = "agm,agrv2k-gptimer";
+			reg = <0x40023000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <22 1>; /* PLIC IRQ 22, priority 1 */
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <19>; /* APB_MASK_GPTIMER3 */
+			status = "disabled";
+		};
+
+		gpt4: timer@40024000 {
+			compatible = "agm,agrv2k-gptimer";
+			reg = <0x40024000 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <23 1>; /* PLIC IRQ 23, priority 1 */
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <20>; /* APB_MASK_GPTIMER4 */
+			status = "disabled";
+		};
+
+		gpt0_pwm: pwm@40020000 {
+			compatible = "agm,agrv2k-gptimer-pwm";
+			reg = <0x40020000 0x1000>;
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <16>; /* APB_MASK_GPTIMER0 */
+			/* CH0..3 pins (see gpt0_pwm_default); routed by the
+			 * driver through pinctrl_apply_state() at init. */
+			pinctrl-0 = <&gpt0_pwm_default>;
+			pinctrl-names = "default";
+			#pwm-cells = <3>;
+			status = "disabled";
+		};
+
+		gpt1_pwm: pwm@40021000 {
+			compatible = "agm,agrv2k-gptimer-pwm";
+			reg = <0x40021000 0x1000>;
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <17>; /* APB_MASK_GPTIMER1 */
+			/* CH0..3 pins (see gpt1_pwm_default); routed by the
+			 * driver through pinctrl_apply_state() at init. */
+			pinctrl-0 = <&gpt1_pwm_default>;
+			pinctrl-names = "default";
+			#pwm-cells = <3>;
+			status = "disabled";
+		};
+
+		gpt2_pwm: pwm@40022000 {
+			compatible = "agm,agrv2k-gptimer-pwm";
+			reg = <0x40022000 0x1000>;
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <18>; /* APB_MASK_GPTIMER2 */
+			/* CH0..3 pins (see gpt2_pwm_default); routed by the
+			 * driver through pinctrl_apply_state() at init. */
+			pinctrl-0 = <&gpt2_pwm_default>;
+			pinctrl-names = "default";
+			#pwm-cells = <3>;
+			status = "disabled";
+		};
+
+		gpt3_pwm: pwm@40023000 {
+			compatible = "agm,agrv2k-gptimer-pwm";
+			reg = <0x40023000 0x1000>;
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <19>; /* APB_MASK_GPTIMER3 */
+			/* CH0..3 pins (see gpt3_pwm_default); routed by the
+			 * driver through pinctrl_apply_state() at init. */
+			pinctrl-0 = <&gpt3_pwm_default>;
+			pinctrl-names = "default";
+			#pwm-cells = <3>;
+			status = "disabled";
+		};
+
+		can0: can@4002a000 {
+			compatible = "agm,agrv2k-can";
+			reg = <0x4002a000 0x1b4>;
+			interrupt-parent = <&plic>;
+			interrupts = <29 1>; /* PLIC IRQ 29 (CAN0_IRQn in SDK), priority 1 */
+			agm,apb-clkenable-bit = <26>; /* APB_MASK_CAN0 */
+			/* CAN engine clock: the bitstream feeds SYSCLK to the
+			 * controller's "XTAL1" input (:
+			 * f_can tracks SYSCLK, not BUSCLK). clk0 carries the
+			 * board SYSCLK rate and is already overridden by the
+			 * 100 MHz boards for UART0, so the driver follows
+			 * SYSCLK without a board-specific constant. */
+			clocks = <&clk0>;
+			/* Pin route lives in the pin controller's can0_default
+			 * state (see above), like uart0: the driver calls
+			 * pinctrl_apply_state() and the bank's APB clock is
+			 * opened by soc.c from the same state. */
+			pinctrl-0 = <&can0_default>;
+			pinctrl-names = "default";
+			/* Board level: only agrv2k_407 turns this node on. The pin
+			 * route above exists on all four variants; the other three
+			 * have no bitstream routing a CAN transceiver, so enabling
+			 * it there would hang the bus. */
+			status = "disabled";
+		};
+
+		gpt4_pwm: pwm@40024000 {
+			compatible = "agm,agrv2k-gptimer-pwm";
+			reg = <0x40024000 0x1000>;
+			clocks = <&clk0>; /* SYSCLK; per-board via &clk0 */
+			agm,apb-clkenable-bit = <20>; /* APB_MASK_GPTIMER4 */
+			/* CH0..3 pins (see gpt4_pwm_default); routed by the
+			 * driver through pinctrl_apply_state() at init. */
+			pinctrl-0 = <&gpt4_pwm_default>;
+			pinctrl-names = "default";
+			#pwm-cells = <3>;
+			status = "disabled";
+		};
+
+		/* CPLD (FPGA fabric) AHB slave window — 0x60000000-0x7FFFFFFF.
+		 *
+		 * The SoC decoder sends every MCU load/store in that range to
+		 * the bitstream's `mem_ahb_*` slave port (board.vx already
+		 * carries it). The fabric answers with the AHB hreadyout
+		 * handshake, so a bitstream without a slave for the accessed
+		 * offset stalls the CPU instead of faulting — never enable
+		 * this node on a board whose bitstream has no slave.
+		 *
+		 * Vendor docs: the MCU+CPLD programming note; the vendor
+		 * examples (example_cpldAhbTxRxReg / example_adcAndSpi / ...)
+		 * show the fabric side. We describe the window only — its
+		 * contents are Verilog-defined — and access it through the
+		 * module driver (drivers/misc/cpld_agm.c, API in
+		 * include/zephyr/drivers/misc/cpld_agm.h), which range-checks
+		 * offsets against `reg` before touching the bus.
+		 *
+		 * No "syscon" here on purpose: with both compatibles the
+		 * generic syscon driver and cpld_agm would each define a device
+		 * for this node, and both carry its ordinal name
+		 * (__device_dts_ord_<n>) → "multiple definition" at link time
+		 * .
+		 *
+		 * Default 0x8000 covers the vendor example map (ADC0/1/2 at
+		 * +0x0/+0x1000/+0x2000, SPI0 at +0x6000). Boards whose
+		 * bitstream decodes more override the size in their .dts.
+		 *
+		 * status: board-level, like can0 — only boards whose bitstream
+		 * implements a slave enable it (agrv2k_407 through
+		 * samples/cpld_reg).
+		 */
+		cpld0: cpld@60000000 {
+			compatible = "agm,agrv2k-cpld";
+			reg = <0x60000000 0x8000>;
+			status = "disabled";
+		};
+
+		/*
+		 * eth0 — AgRV2K on-die MAC0 at 0x41040000.
+		 *
+		 * Disabled by default: the SDK ships no MAC pins in
+		 * the eval-board bitstream (LED3/4 occupy PIN_53/54, no
+		 * RMII pins are routed to the GPIO bank, no PHY RSTB).
+		 * Boards that bring their own RMII PHY (e.g. the LAN8720
+		 * sample overlay) replace the pin list and enable this.
+		 *
+		 * The MDIO controller is a child node (see
+		 * dts/bindings/ethernet/mdio/agm,agrv2k-mdio.yaml). It
+		 * inherits the parent MAC's AHB gate (bit 3 on AgRV2K)
+		 * and AFSEL on the MAC0_MDC / MAC0_MDIO pins.
+		 *
+		 * phy-handle: defaulted to the LAN8720 PHY at address 1.
+		 * Verified on the dev board by an MDIO 0..7 scan returning
+		 * 0x0007/0xc0f1 only at reg=1 (the SDK's CRS_DV/RXER
+		 * strap = 11b default = addr 3 doesn't apply to the
+		 * off-the-shelf LAN8720 modules used here, whose
+		 * PHYAD[1:0] strap = 00b). Override in the per-board
+		 * overlay if a different strap is wired.
+		 *
+		 * Binding: dts/bindings/ethernet/agm,agrv2k-emac.yaml.
+		 */
+		eth0: ethernet@41040000 {
+			compatible = "agm,agrv2k-emac";
+			reg = <0x41040000 0x28>;
+			interrupts = <36 1>;
+			interrupt-parent = <&plic>;
+			agm,ahb-clkenable-bit = <3>;
+			agm,ahb-reset-bit = <3>;
+			phy-connection-type = "rmii";
+			/* The PHY whose link drives this MAC's carrier. The MAC
+			 * driver subscribes with phy_link_callback_set(), exactly
+			 * like the upstream Ethernet drivers do -- without it the
+			 * link state would only reach the net stack through
+			 * application glue, and anything that waits for the
+			 * interface to become operational (net_config_init's
+			 * auto-init, for one) would wait for an event nobody
+			 * sends. */
+			phy-handle = <&phy0>;
+			local-mac-address = [00 00 5A 00 00 01];
+			pinctrl-0 = <&eth0_default>;
+			pinctrl-names = "default";
+			status = "disabled";
+
+			mdio0: mdio {
+				compatible = "agm,agrv2k-mdio";
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				phy0: ethernet-phy@1 {
+					compatible = "microchip,lan8720";
+					reg = <1>;
+					status = "disabled";
+				};
+			};
+		};
+
+	};
+};

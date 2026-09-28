@@ -1,0 +1,27 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * The backup-domain RTC at the real address (0x40000000). The clock source is
+ * "lsi" on purpose: the binding's default is "lse", and an LSE start waits for
+ * LSERDY in rounds of ~1 s, which would dominate this suite. LSI exercises the
+ * same BDCR programming without the crystal.
+ */
+
+/ {
+	fake_intc: interrupt-controller {
+		compatible = "vnd,fake-intc";
+		interrupt-controller;
+		#interrupt-cells = <2>;
+	};
+
+	rtc_agm0: rtc@40000000 {
+		compatible = "agm,agrv2k-rtc";
+		reg = <0x40000000 0x100>;
+		interrupts = <13 1>;
+		interrupt-names = "rtc";
+		interrupt-parent = <&fake_intc>;
+		agm,rtc-source = "lsi";
+		agm,rtc-frequency = <32768>;
+		agm,prescaler = <32767>;
+		status = "okay";
+	};
+};

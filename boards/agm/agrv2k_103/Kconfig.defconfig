@@ -1,0 +1,11 @@
+# Board-level defaults for AGM AgRV2K 103.
+# Body is shared with the other agrv2k variants — see shared/Kconfig.defconfig.body
+#
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+if BOARD_AGM_AGRV2K_103
+config BOARD
+	default "agm_agrv2k_103"
+rsource "../agrv2k/shared/Kconfig.defconfig.body"
+endif

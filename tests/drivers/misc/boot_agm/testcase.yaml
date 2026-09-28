@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.misc.boot_agm.api:
+    platform_allow:
+      - native_sim
+    tags:
+      - flash
+      - hal_ag32
+  # The same suite with the fabric window opened up for the AN3155 read
+  # command: the fabric is write-only by default (it is the vendor's IP and
+  # the read path dumps it over the console UART), and this scenario is what
+  # keeps the diagnostic switch from rotting.
+  drivers.misc.boot_agm.api_fabric_read:
+    extra_configs:
+      - CONFIG_BOOT_AGM_AN3155_READ_FABRIC=y
+    platform_allow:
+      - native_sim
+    tags:
+      - flash
+      - hal_ag32
+  # The production-locked profile: the AN3155 option-byte window stops
+  # claiming "unprotected" (it answers 0x00 = unknown, so the vendor tool
+  # stops before writing) and the one-shot escape hatch is refused.
+  drivers.misc.boot_agm.api_locked:
+    extra_configs:
+      - CONFIG_BOOT_AGM_AN3155_CLAIM_UNPROTECTED=n
+      - CONFIG_BOOT_AGM_LOCK_PRODUCTION=y
+    platform_allow:
+      - native_sim
+    tags:
+      - flash
+      - hal_ag32

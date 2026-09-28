@@ -1,0 +1,36 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Devicetree for the native DMAC suite: the real controller address
+ * (0x41000000), the real binding, all three interrupt lines (the driver and
+ * its binding require intr/inttc/interr), and the AHB gate/reset bits the
+ * devicetree carries (soc.c would apply them on a board; nothing does here,
+ * which is fine because the window is RAM).
+ *
+ * The IRQ *numbers* are native_sim's, not the SoC's: its interrupt controller
+ * has 32 lines (0..31) and refuses anything above, while the real part wires
+ * DMAC0 to 32/33/34 (the binary aborts at init with "Attempted to
+ * configure not existent interrupt 32"). Nothing fires in this suite -- what
+ * matters is that there are three specifiers in intr/inttc/interr order, which
+ * is what the driver's BUILD_ASSERT and IRQ_CONNECT sequence check.
+ */
+
+/ {
+	fake_intc: interrupt-controller {
+		compatible = "vnd,fake-intc";
+		interrupt-controller;
+		#interrupt-cells = <2>;
+	};
+
+	dma_agm0: dma@41000000 {
+		compatible = "agm,agrv2k-dma";
+		reg = <0x41000000 0x200>;
+		interrupts = <5 1>, <6 1>, <7 1>;
+		interrupt-names = "intr", "inttc", "interr";
+		interrupt-parent = <&fake_intc>;
+		#dma-cells = <1>;
+		dma-channels = <8>;
+		agm,ahb-clkenable-bit = <0>;
+		agm,ahb-reset-bit = <0>;
+		status = "okay";
+	};
+};

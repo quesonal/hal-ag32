@@ -1,0 +1,17 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AgRV2K MAC0 hardware MDIO controller.
+
+  The MDIO register is part of the MAC0 register file (offset 0x10
+  from 0x41040000); the controller has its own AFSEL on the MDC/MDIO
+  pins but no separate clock/reset domain. Drivers should be children
+  of an `agm,agrv2k-emac` parent node and inherit its reg/interrupt
+  semantics -- this binding does not require its own reg.
+
+  Driver: drivers/ethernet/mdio/mdio_agm.c.
+
+compatible: "agm,agrv2k-mdio"
+
+include: [mdio-controller.yaml, pinctrl-device.yaml]

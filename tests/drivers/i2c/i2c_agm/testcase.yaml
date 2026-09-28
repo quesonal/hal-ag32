@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.i2c.i2c_agm.native:
+    platform_allow:
+      - native_sim
+    tags:
+      - i2c
+      - hal_ag32

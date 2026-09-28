@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# hal_ag32 — Zephyr module manifest.
+#
+# Self-contained out-of-tree module for the AgRV2K SoC + AGM eval
+# boards. Zephyr 4.4's scripts/zephyr_module.py reads ONLY
+# <module>/zephyr/module.yml — a root-level module.yml is dead code.
+#
+# This manifest:
+#   * Registers cmake glue at the repo root (build.cmake: .) so the
+#     module's top-level CMakeLists.txt is the entry point. The
+#     CMakeLists.txt add_subdirectory()'s soc/ — dts/, boards/,
+#     dts/bindings/ are pulled in via the dts/board/soc roots below.
+#   * Registers a single Kconfig root (build.kconfig: Kconfig) at
+#     the repo root that rsources Kconfig.{soc,drivers,boards}.
+#   * Tells the build system that dts/, soc/, and boards/ all live
+#     at the repo root (settings.{dts,soc,board}_root: .).
+#   * Declares samples/ + boards/ for `west twister` (twister needs
+#     explicit `-T` / `--board-root` arguments; `west build` does
+#     not, but `samples: [samples]` + `boards: [.]` keeps both happy).
+#   * Registers two custom west runners under runners:[] so
+#     `west flash --runner agrv32flash` and `--runner agrv_openocd`
+#     work without per-user PYTHONPATH fiddling.
+#
+# Driver sources, their Kconfig.agm files and the bindings that select
+# them all live in this module (drivers/, dts/bindings/). The zephyr tree
+# carries no AGM-specific lines: `git -C <workspace>/zephyr diff
+# origin/main` is empty, which is what makes the Zephyr side pinnable.
+
+name: hal_ag32
+build:
+  cmake: .
+  # kconfig defaults to zephyr/Kconfig — the path module.yml lives
+  # next to. We could also have written `kconfig: Kconfig` for a
+  # module-root Kconfig, but rsources in the Kconfig parser resolve
+  # against the parsed file's directory, so sibling-file layouts
+  # (`rsource "Kconfig.soc"` next to Kconfig) don't work without
+  # absolute paths or $(srctree) tricks. Putting Kconfig under
+  # zephyr/ lets us use the `../soc/...` form like espressif does.
+  settings:
+    dts_root: .
+    soc_root: .
+    board_root: .
+    snippet_root: .
+samples:
+  - samples
+boards:
+  - .
+runners:
+  - file: scripts/west_commands/runners/agrv32flash.py
+  - file: scripts/west_commands/runners/agrv_openocd.py

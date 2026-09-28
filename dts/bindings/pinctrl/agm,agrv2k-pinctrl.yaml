@@ -1,0 +1,53 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+title: AgRV2K pin controller
+
+description: |
+  AgRV2K pin controller — alternate-function routing only.
+
+  Which pin carries which signal is baked into the FPGA bitstream
+  (board.ve → .bin), but the last step of the route is a runtime
+  register: the GPIO bank's AFSEL bit selects whether the pin is driven
+  by software (DATA) or by the peripheral, and DIR decides whether the
+  pin drives at all. A state therefore lists, per pin, the bank/bit pair
+  and the direction the route needs — see
+  include/zephyr/dt-bindings/pinctrl/agm-agrv2k-pinctrl.h for the
+  AGM_PINCTRL() encoding. pinctrl_configure_pins() in
+  soc/agm/agrv2k/pinctrl.c writes those registers.
+
+  Electrical attributes (bias, drive strength) are *not* runtime
+  registers on this SoC: the bitstream's ASF (CPLD) settings own them,
+  which is why this binding does not accept bias-pull-* /
+  drive-strength. Pulls are declared per pin in the pin map instead
+  (`agm,pull-ups` / `agm,pull-downs` in the agm,agrv2k-pins node), which
+  tools/generate_board_ve.py renders into board.asf for Quartus; drive
+  strength and CFG_KEEP still go in a hand-written board.asf.
+
+  The controller node must exist, together with a default state on each
+  consumer: drivers/serial/uart_agm.c::agm_uart_init() returns the error
+  from pinctrl_apply_state(..., PINCTRL_STATE_DEFAULT), and
+  pinctrl_lookup_state() returns -ENOENT for a device without a state.
+
+compatible: "agm,agrv2k-pinctrl"
+
+include: [base.yaml]
+
+child-binding:
+  description: |
+    One pinctrl state (pin group), referenced by a consumer's pinctrl-N
+    property, e.g. uart0's "default" state.
+  properties:
+    agm,pins:
+      type: array
+      required: true
+      description: |
+        Alternate-function routes for this state, one AGM_PINCTRL() cell
+        each: <AGM_PINCTRL(bank, pin, dir)>. bank is the AgRV2K GPIO bank
+        index 0..9, pin the bit within it 0..7, and dir is one of
+        AGM_PINCTRL_INPUT, AGM_PINCTRL_OUTPUT or AGM_PINCTRL_NO_DIR
+        (open-drain pins whose direction the peripheral owns -- the I2C
+        pins). Out-of-range values are rejected by pinctrl_configure_pins()
+        with -EINVAL (which fails the consumer's init) instead of writing
+        outside the GPIO block, but they still belong in a dut check -- the
+        pack macro cannot assert.

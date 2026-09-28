@@ -1,0 +1,521 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# AgRV2K CPLD (FPGA fabric) window driver.
+#
+# Unlike the other drivers in this module (can/counter/dma/i2c/pwm/serial/
+# usb/watchdog), this one is not rsourced inside an `if <SUBSYS>` in
+# zephyr/Kconfig: Zephyr has no MISC subsystem menu to gate it, and the
+# symbol selects nothing outside itself, so there is no dependency graph
+# to preserve.
+
+menuconfig BOOT_AGM
+	bool "AgRV2K bootloader / DFU driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_BOOT_ENABLED
+	depends on FLASH
+	help
+	  Storage and DFU for an AgRV2K bootloader: the boot record, the A/B
+	  image stores in the external flash, the application slot and the
+	  bitstream reservation in the on-die flash, the on-die DFU target and
+	  the A/B boot policy with attempt-counted rollback. The layout comes
+	  from the devicetree node (dts/bindings/misc/agm,agrv2k-boot.yaml);
+	  the API is include/zephyr/drivers/misc/boot_agm.h.
+
+	  The layout lives in the devicetree node rather than in the driver so
+	  a board can move the regions (or point them at a second flash) without
+	  touching the code.
+
+# The fabric (bitstream) area's two inputs. They are *outside* `if BOOT_AGM`
+# because the area is not the bootloader's: soc/agm/agrv2k/fcb.c streams the
+# fabric in every image, with or without the boot driver, and
+# include/zephyr/drivers/misc/agm_bitstream.h derives the record, slot 2 and
+# slot 1 from these two plus the erase sector. See that header for the
+# derivation and the packing order.
+
+config AGM_BITSTREAM_FACTORY_ADDR
+	hex "Address of the fabric factory region (what the option byte points at)"
+	default 0x800e7000
+	help
+	  Base of the region the ROM streams the fabric from at power-up, i.e.
+	  what the FLASH option byte's FPGA CONFIG points at for an uncompressed
+	  image (a compressed one points at CONFIG_AGM_FCB_BITSTREAM_ALGO_SIZE
+	  into it). It is the anchor the rest of the fabric area is derived
+	  from, and it is per board: 0x800e7000 on agrv2k_407's 1 MiB flash,
+	  0x80027000 on the 256 KiB parts (flash end - 100 KiB).
+
+config AGM_BITSTREAM_SLOT_SIZE
+	hex "Size of one fabric update slot"
+	default 0x19000
+	help
+	  One fabric image rounded up to the erase sector: the vendor image is
+	  99944 B (FCB_AUTO_WORDS) and the sector is 4 KiB, so 100 KiB is the
+	  smallest slot that holds one. The two update slots are this big and
+	  the boot record takes one sector below the factory region; the app
+	  layout then starts below slot 1 (drivers/misc/boot_agm.c asserts the
+	  two meet, and that a whole image fits a slot).
+
+if BOOT_AGM
+
+config BOOT_AGM_BIND
+	bool "Per-chip binding (UID + a provisioned salt)"
+	depends on BOOT_AGM
+	# The tag is an HMAC over the container's version and the digest the
+	# signature covers, so a build without a signature profile has neither.
+	depends on BOOT_AGM_SIG_ECDSA_P256 || BOOT_AGM_SIG_RSA2048_PSS
+	default n
+	help
+	  Derive a per-chip key from the chip's 128-bit UID and a salt written by
+	  production (agm_boot_bind_key()), and require every application image to
+	  carry the tag it keys (agm_boot_bind_tag()): a container bound to another
+	  board, or one with no binding tag at all, is refused on publish and again
+	  on every boot (AGM_BOOT_E_UNBOUND, NAK code 7 on the console). The host
+	  half is tools/agm_bind.py (`embed`, `check`, `provision`).
+
+	  Default n: a build that turns this on needs a provisioned salt to make
+	  sense of it (tools/agm_bind.py provision writes it over SWD), and the
+	  salt is only a secret while RDP protects it -- on an unlocked chip
+	  it is a UID with extra steps.
+
+config BOOT_AGM_BIND_SALT_OFFSET
+	hex "Absolute address of the binding-salt sector (two-flash layouts)"
+	depends on BOOT_AGM_BIND
+	default 0x800b0000
+	help
+	  One 4 KiB, sector-aligned sector in the on-die flash, for the layouts
+	  where the on-die flash does not carry the A/B chain itself (the
+	  stores in the external NOR). The default is the top of the on-die
+	  application slot, in the space the packed fabric area frees below
+	  slot 1 (0x800b4000, the same sector the on-die family derives for
+	  itself -- see BOOT_SALT_OFF in boot_agm_priv.h).
+
+	  The on-die family ignores this value: its salt is the last element of
+	  its own chain (loader | A | B | slot | record | salt), derived from
+	  loader-size, app-size and record-size.
+
+choice BOOT_AGM_SIGNATURE
+	prompt "Image signature"
+	# A production profile ships signed images unless the builder says
+	# otherwise: the profile's whole point is that content and commands are
+	# both authenticated, and its authorization key is a P-256 one (the
+	# fabric key in an RSA build, see BOOT_AGM_PRODUCTION_PROFILE).
+	default BOOT_AGM_SIG_ECDSA_P256 if BOOT_AGM_PRODUCTION_PROFILE
+	default BOOT_AGM_SIG_NONE
+	help
+	  How an uploaded image is checked before it is published and again before
+	  it is booted.
+
+config BOOT_AGM_SIG_NONE
+	bool "CRC32 only (damage detection, not a security boundary)"
+	help
+	  The default: images are raw binaries and the record's CRC32 catches
+	  accidental corruption. Anyone who can write the store or upload through
+	  the console can still install an image of their choosing -- this mode is
+	  explicitly *not* a security boundary.
+
+config BOOT_AGM_SIG_ECDSA_P256
+	bool "SHA-256 + ECDSA P-256 (MCUboot image format)"
+	help
+	  Images must be MCUboot containers (`imgtool sign` output: header + image
+	  + TLV area) and carry a SHA-256 TLV, the KEYHASH of a key the loader
+	  trusts, and an ECDSA P-256 signature. Verification runs on publish and
+	  again before boot. The trusted public key comes from the application
+	  (`const uint8_t agm_boot_pubkey[64]`); the driver's weak default is all
+	  zeroes, which accepts nothing.
+
+	  Raw images are rejected in this mode (the reverse of BOOT_AGM_SIG_NONE),
+	  so a signed build cannot be downgraded by writing an unsigned image.
+
+config BOOT_AGM_SIG_RSA2048_PSS
+	bool "SHA-256 + RSA-2048-PSS (MCUboot image format)"
+	select PSA_CRYPTO
+	select PSA_WANT_ALG_RSA_PSS
+	select PSA_WANT_ALG_SHA_256
+	select PSA_WANT_KEY_TYPE_RSA_PUBLIC_KEY
+	help
+	  Same container and same two enforcement points as
+	  BOOT_AGM_SIG_ECDSA_P256, but the signature TLV is RSA-2048-PSS
+	  (`imgtool keygen -t rsa-2048`) and the trusted key is the 270-byte
+	  PKCS#1 `RSAPublicKey` DER -- `const uint8_t agm_boot_pubkey[270]`.
+
+	  Verification goes through PSA (`psa_verify_hash`), which is what the
+	  `PSA_WANT_*` selects above pull in: this tree's RSA lives in
+	  tf-psa-crypto behind the PSA API only, there is no classic mbedTLS
+	  `rsa.h` any more. SHA-256 is not optional even though the loader hands
+	  `psa_verify_hash()` a hash it computed itself -- PSS spends it on MGF1.
+	  Hashing the image and the KEYHASH both go through that same PSA
+	  SHA-256, which is why this profile links no tinycrypt at all: MCUboot's
+	  copy costs 1426 B of ROM in this image, and hashing through PSA
+	  instead nets -496 B (the PSA hash API layer gives some of it back).
+
+	  Cost vs. ECDSA (rv32imafc, -Os): the fingerprint
+	  is ~4x larger (+15.8 KB of ROM on the loader, PSA core included) but a
+	  verification is ~1100x faster (99 us vs 110 ms) -- and the check runs
+	  on *every* boot, so that is a per-boot cost.
+
+	  Two settings are worth knowing about:
+	  CONFIG_MBEDTLS_PSA_KEY_SLOT_COUNT defaults to 16 static key slots,
+	  each sized for the largest enabled key type; this driver imports
+	  exactly one public key, so setting it to 2 saves ~7.9 KB of RAM
+	  and changes no behaviour. The samples and tests that build
+	  this profile set it.
+
+endchoice
+
+config BOOT_AGM_ANTI_ROLLBACK
+	bool "Anti-rollback: refuse an image older than the one installed"
+	depends on BOOT_AGM_SIG_ECDSA_P256 || BOOT_AGM_SIG_RSA2048_PSS
+	default y
+	help
+	  Signing says *who* may install an image; it says nothing about *which*
+	  one. Without this, anyone who kept an older signed container -- or who
+	  finds an old release on the vendor's site -- can install it again and
+	  undo a fix, because the container is genuine and its signature still
+	  checks out.
+
+	  With this on, a container's version (MCUboot's `ih_ver`: major, minor,
+	  revision; the build number is ignored so a rebuild of the same release
+	  does not look newer) is compared against a floor the boot record
+	  carries, and an image below it is refused **when it is installed**
+	  (NAK code 5 / SMP MGMT_ERR_EBADSTATE). The floor rises with every
+	  accepted image and lives in the record, so `erase`, the DFU paths and
+	  a power cut keep it.
+
+	  Where it is *not* checked, on purpose: the boot path. An image that
+	  was published before the floor rose -- the usual A/B situation, the
+	  other slot holds the previous release -- keeps booting, because
+	  refusing it there would also disable the A/B rollback that is this
+	  loader's safety net; `rollback` (A/B policy, not an upload path) can
+	  therefore put the board back on a version below the floor. (This
+	  option used to describe itself as checking "again before it is
+	  booted"; it never did --.) What closes that is read/write
+	  protection, not this check.
+
+	  What it does not do: a raw flash write (SWD, `erase-all`, an external
+	  tool) can still clear the record along with the floor. Closing that is
+	  the read/write-protection half (RDP + option bytes), not
+	  something a device-side check can do on this part. Sign your images
+	  with `sign_image.py --version X.Y.Z`; the floor is the highest version
+	  ever accepted, so never ship a release whose version goes backwards.
+
+config BOOT_AGM_BITSTREAM_SIGNED
+	bool "Fabric (bitstream) slots hold signed MCUboot containers"
+	depends on BOOT_AGM
+	select CRC
+	help
+	  Require the two fabric update slots (0x800b4000 / 0x800cd000, see
+	  soc/agm/agrv2k/agm_bitstream.h) to carry MCUboot containers produced by
+	  `tools/sign_image.py --bitstream`, and verify them with ECDSA P-256
+	  twice: before an upload is committed to the record, and again in the
+	  boot path before the fabric is streamed. A slot that does not verify is
+	  never streamed -- the board stays on the factory fabric -- so without
+	  the private key nobody can replace the fabric through the upload paths
+	  (console, AN3155/agrv32flash, mcumgr).
+
+	  The factory region (0x800e7000, what the option byte points at) is *not*
+	  covered: the ROM streams it before any of our code runs, and only an
+	  external tool ever writes it. Covering it means read/write protection,
+	  which is a separate plan.
+
+	  The profile is ECDSA P-256 even in an RSA application build, and that
+	  is not a preference: the boot-path check runs at PRE_KERNEL_1, before
+	  Zephyr's heap exists (`malloc_prepare()` is a POST_KERNEL init), so the
+	  PSA-based RSA verifier -- which allocates -- cannot run there:
+	  a `malloc()` from PRE_KERNEL_1 traps (mcause=5, mtval=8) and
+	  the board never reaches the console. tinycrypt's P-256 verify is
+	  allocation-free. The cost is measurable: ~5.7 KB of ROM and ~110 ms on
+	  every boot that streams an update slot, against ~99 us for RSA.
+
+	  The key is `agm_boot_bitstream_pubkey[64]`; an all-zero one falls back
+	  to `agm_boot_pubkey` when that is a P-256 key. Because the verification
+	  runs on the interrupt stack (PRE_KERNEL_1), the build also needs
+	  CONFIG_ISR_STACK_SIZE >= 3072 -- the driver has a BUILD_ASSERT for it.
+
+config BOOT_AGM_INIT_PRIORITY
+	int "Boot driver init priority"
+	default 90
+	help
+	  Initialization priority of the boot driver (POST_KERNEL level). The init
+	  checks that both flash devices are ready and reads the boot record, so
+	  it has to run *after* the flash drivers -- Zephyr's own flash init
+	  priority (CONFIG_FLASH_INIT_PRIORITY, default 80) is the dependency
+	  that shows up as "initialized before its dependency ... spi_nor_init"
+	  when this is set too low.
+
+config BOOT_AGM_VERBOSE_LOG
+	bool "Boot driver diagnostics on the early console"
+	default n
+	help
+	  Print the loader's informational lines (which fabric slot the FCB
+	  streamed this boot, and similar) from boot_agm_init(). They are
+	  diagnostics only and land on the early console before anything has
+	  flushed it, so production images can leave them out. Errors are printed
+	  regardless of this option.
+
+config BOOT_AGM_ONESHOT
+	bool "One-shot boot override in the RTC backup domain"
+	default y
+	depends on !COUNTER_AGM_RTC
+	help
+	  The `once <internal|external|none>` override (the RTC-backed
+	  equivalent of the vendor DFU's mscratch trick): the driver writes the
+	  next boot's mode into RTC backup registers and consumes it at the next
+	  boot.
+
+	  It talks to the RTC registers directly, using the register map in
+	  drivers/counter/agm_rtc_regs.h -- the same one counter_agm_rtc.c uses,
+	  so the two cannot drift apart (they did: this driver waited on a
+	  prescaler bit and wrote its magic into the alarm registers). It does *not*
+	  go through the counter driver because that would
+	  pull the RTC driver and an LSE start-up wait (up to a second, on every
+	  boot) into a loader that needs neither the counter nor the LSE; the
+	  `depends on !COUNTER_AGM_RTC` above keeps the same image from having two
+	  writers of the backup domain.
+
+	  The base address comes from the RTC node in the devicetree, and a SoC
+	  without that node (or a target like the native_sim test) compiles the
+	  stub instead: `once` then reports "unavailable" rather than touching
+	  registers that are not there. It also answers "unavailable" if the RTC
+	  clock never starts, which is what the bounded RTOFF wait reports.
+
+config BOOT_AGM_TRIAL_WATCHDOG
+	bool "Arm the IWDG before booting a trial image"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_IWDG_ENABLED
+	select WATCHDOG
+	select WDT_AGRV2K_IWDG
+	help
+	  Arm the backup-domain IWDG right before jumping into a TRIAL image, and
+	  hand the application a ticket it answers with
+	  `agm_boot_trial_confirm()` (see the handshake section of
+	  include/zephyr/drivers/misc/boot_agm.h).
+
+	  This is what makes the trial-boot rollback automatic. Without it the
+	  attempt counter only advances when someone presses reset, so an image
+	  that hangs (or that never gets far enough to confirm) stays in TRIAL
+	  forever instead of going BAD and falling back to the other slot.
+
+	  The watchdog is cleared again on every non-trial boot path, so a
+	  leftover one cannot reset the loader while it sits in the console.
+
+config BOOT_AGM_TRIAL_WATCHDOG_TIMEOUT_MS
+	int "Trial boot watchdog timeout (ms)"
+	depends on BOOT_AGM_TRIAL_WATCHDOG
+	default 5000
+	range 64 8192
+	help
+	  How long the image gets to reach its self-test and confirm. The IWDG has
+	  only its eight prescaler taps (64 / 128 / 256 / 512 / 1024 / 2048 / 4096
+	  / 8192 ms nominal at LSI 32 kHz), so the driver rounds up to the next
+	  one -- 5000 ms lands on 8192 ms -- and the LSI's temperature drift
+	  (±30 %) is on top of that.
+
+	  Keep it comfortably longer than the application's start-up: a timeout
+	  that fires before the self-test does costs the trial an attempt (three
+	  of them roll the slot back).
+
+	  The native tests cannot cover this chain: they have no rtc0/IWDG node,
+	  so the backup-domain helpers answer -ENOTSUP there and arm/confirm is
+	  never exercised. Its evidence is the dev board sequence in
+
+
+config BOOT_AGM_AN3155
+	bool "AN3155 (agrv32flash) server"
+	# ... except in the production profile, where the vendor tool has no way
+	# in anyway (it cannot carry a signed command, and an upload needs two):
+	# a default, not `depends on`, so a builder who really wants it in a
+	# shipped image can still say so explicitly and own that decision.
+	default y if !BOOT_AGM_PRODUCTION_PROFILE
+	default n
+	help
+	  Answer the vendor's AN3155 bootloader protocol on the console UART,
+	  so `agrv32flash -b 115200 -m 8n1 -S <window> -w image -g <window>`
+	  can drive the stores, the on-die slot and the bitstream staging area.
+	  See drivers/misc/boot_agm_an3155.c.
+
+config BOOT_AGM_AN3155_READ_FABRIC
+	bool "let the AN3155 read command dump the whole fabric (bitstream) window"
+	depends on BOOT_AGM_AN3155
+	default n
+	help
+	  AN3155's read-memory command (0x11) is what `agrv32flash -S <addr>
+	  -r <file>` uses to dump a window over the console UART. One of the
+	  windows the loader serves is the fabric staging area -- i.e. the
+	  vendor's bitstream, which is licensed IP and the one thing on this
+	  board that is not ours to hand out.
+
+	  With this off (the default) that window answers reads only for the
+	  bytes the *current session* wrote: that is what the vendor tool
+	  reads back to verify a write it just made, while a dump of the
+	  bitstream would have to write over it first -- i.e. destroy it. A
+	  read past that watermark is answered with NACK (the same shape as an
+	  unmapped address) and counted in the console's `an-status`. Turn
+	  this on only for dev board diagnostics that have to read the fabric
+	  back.
+
+	  Note what this does *not* cover: with the default layout, AN3155's
+	  window A starts where the loader itself lives, so a host can still
+	  read our own firmware out through it -- exactly like `agrv32flash -r`
+	  for a store. That is the same exposure as SWD-while-RDP-is-off, and
+	  it is closed by the read/write protection plan, not by this option.
+
+config BOOT_AGM_AN3155_CLAIM_UNPROTECTED
+	bool "answer every AN3155 RDP read as 'unprotected' (0xA5)"
+	depends on BOOT_AGM_AN3155
+	default y
+	help
+	  `agrv32flash` reads RDP out of the option-byte window and refuses to
+	  write when it reads "protected", so this server has been synthesising
+	  0xA5 ("unprotected") to keep the AN3155 DFU path usable. On a board
+	  that really is locked that is a lie: the tool gets a green light and
+	  the controller then refuses every write, with nothing in the log to
+	  explain why.
+
+	  The CPU cannot read the real option bytes at all -- they sit behind
+	  the AP/flash-controller path -- so
+	  "report the truth" means "report unknown", which is what turning this
+	  off does: *both* RDP replies this server synthesises answer unknown
+	  -- the read-memory option-byte window 0x00, and the GVR half-word
+	  0x0000 -- and the tool stops before writing. (The GVR half-word used
+	  to stay 0xA5 whatever this option said, so a host that reads RDP
+	  through GVR still got a green light; fixed.) Keep it on for dev board
+	  work with that tool; a production
+	  profile turns it off together with the upload paths it no longer
+	  wants.
+
+config BOOT_AGM_LOCK_PRODUCTION
+	bool "production lock: gate the state-changing commands"
+	default n
+	help
+	  Declares this build a production image. Two things change:
+
+	  * the RTC one-shot override (`once`), which on the dev board is the way to
+	    force a non-A/B boot path, is refused instead of armed;
+	  * opening an upload into a target, publishing one, and erasing a
+	    target need a *signed command* first: the host asks for a nonce
+	    (agm_boot_nonce_get()) and returns an ECDSA P-256 signature over
+	    nonce || command || arguments (agm_boot_authorize()). Without one
+	    they refuse with AGM_BOOT_E_UNAUTHORIZED and change nothing --
+	    including the upload session, whose first write would erase the
+	    target (and, for a store, the image the record still points at).
+	    One grant covers one command, so an upload takes two: erase to
+	    open the session, publish to finish it. Read-only commands and the
+	    A/B policy (`confirm`/`rollback`) never need it -- they are not an
+	    upload path.
+
+	  The key is the build's existing P-256 one (the application's
+	  `agm_boot_pubkey`, or the fabric key in an RSA build, whose
+	  application key is not a P-256 point), and this option therefore
+	  links the same tinycrypt verifier the signed profiles use. A build
+	  with no P-256 key at all -- LOCK_PRODUCTION plus
+	  BOOT_AGM_SIG_RSA2048_PSS without BOOT_AGM_BITSTREAM_SIGNED -- has
+	  nothing to verify with and refuses every state-changing command
+	  (fail closed, no unlock).
+
+	  What this does not do: it is not a physical boundary. The console and
+	  AN3155 servers are separate options (a production profile turns both
+	  off); an unlocked chip can also still be written through SWD or the
+	  ROM bootloader. Closing that is the read/write-protection half, i.e.
+	  the RDP work.
+
+	  Keep at least one path that can *send* a signed command: only SMP
+	  (CONFIG_BOOT_AGM_SMP, group 0x40) hands out the nonce and accepts the
+	  AUTHORIZE request, so a locked build with that server compiled out can
+	  no longer be updated in-band at all -- SWD or the BOOT0/ROM bootloader
+	  is what is left. (The console's `upload` phase and the vendor
+	  agrv32flash cannot stand in for it: an upload needs one grant to open
+	  the session and another to publish, and neither of those paths can be
+	  handed a second one mid-flight.) A locked build that cannot verify a
+	  command, or that has no server to receive one, says so on the console
+	  at boot instead of waiting for an operator to discover it.
+
+config BOOT_AGM_PRODUCTION_PROFILE
+	bool "production profile: the locked shape a shipped board uses"
+	default n
+	select CRC
+	select NET_BUF
+	select ZCBOR
+	select MCUMGR
+	# The serial helpers both servers use need base64 (the stock UART
+	# transport gets it through a `depends on BASE64`, the driver's
+	# hand-written path has to say so itself -- which is exactly the kind of
+	# detail a preset is for).
+	select BASE64
+	select BOOT_AGM_SMP
+	select BOOT_AGM_LOCK_PRODUCTION
+	select BOOT_AGM_BITSTREAM_SIGNED
+	help
+	  One switch for the shape a board that leaves the dev board should have,
+	  instead of four settings that have to agree:
+
+	  * the state-changing commands are gated (BOOT_AGM_LOCK_PRODUCTION);
+	  * SMP is in (BOOT_AGM_SMP) -- it is the only path that can hand out a
+	    nonce and take an AUTHORIZE, so a locked build without it cannot be
+	    updated in-band at all;
+	  * the fabric (bitstream) slots hold signed containers
+	    (BOOT_AGM_BITSTREAM_SIGNED); in an RSA application build that is also
+	    where the P-256 *command* key comes from, so this is what makes "RSA
+	    production image" a workable combination rather than one that refuses
+	    every state change;
+	  * AN3155 defaults off (see that option) and the signature choice
+	    defaults to ECDSA P-256 (see BOOT_AGM_SIGNATURE).
+
+	  What it pulls in is the mcumgr stack (a few KB of ROM) and what it
+	  requires is a trusted public key: the sample refuses to *build* a
+	  production image without `-DSPI_BOOT_PUBKEY=<file>`, because a locked
+	  board with an all-zero key is one nobody can update again.
+
+	  What it deliberately does not decide: the console's command set (a
+	  shipped image that wants the console read-only trims it in the
+	  application, 6.4), the read/write protection (RDP and its options are a
+	  provisioning step), and "no updates on purpose" -- setting
+	  BOOT_AGM_LOCK_PRODUCTION directly, without this profile and without a
+	  key, is that choice, and the boot log will say so.
+
+config BOOT_AGM_SMP
+	bool "mcumgr (SMP) image management server"
+	depends on MCUMGR
+	depends on ZCBOR
+	depends on NET_BUF
+	default y
+	select MCUMGR_TRANSPORT_SERIAL_HAS_SMP_OVER_CONSOLE
+	help
+	  Answer SMP image management requests (mcumgr/smpmgr) on the console
+	  UART: image upload (the A/B stores and the on-die slot), image state,
+	  image erase and confirm. The framing helpers come from Zephyr's own
+	  serial transport (CONFIG_MCUMGR_TRANSPORT_SERIAL_HAS_SMP_OVER_
+	  CONSOLE); the transport driver itself is not used, because it takes
+	  the UART over through an IRQ and this UART also carries the console
+	  and AN3155. See drivers/misc/boot_agm_smp.c.
+
+endif # BOOT_AGM
+
+menuconfig CPLD_AGM
+	bool "AgRV2K CPLD (FPGA fabric) window driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_CPLD_ENABLED
+	help
+	  Driver for the on-die FPGA fabric window (0x60000000-0x7FFFFFFF).
+	  The window's register map belongs to the bitstream, so the driver
+	  exposes only 32-bit, bounds-checked access
+	  (include/zephyr/drivers/misc/cpld_agm.h) plus an optional shell.
+	  Enable only on boards whose bitstream implements a mem_ahb slave:
+	  an access the fabric does not answer stalls the CPU.
+
+if CPLD_AGM
+
+config CPLD_AGM_INIT_PRIORITY
+	int "CPLD window driver init priority"
+	default 50
+	help
+	  Initialization priority of the CPLD window driver. The init only
+	  maps the window, so the default is fine unless a consumer device
+	  must initialize after it.
+
+config CPLD_AGM_SHELL
+	bool "CPLD window shell"
+	depends on SHELL
+	help
+	  Add `cpld info|read|write|dump` to the shell for dev board work on a
+	  bitstream whose register map is only known from its Verilog.
+
+endif # CPLD_AGM

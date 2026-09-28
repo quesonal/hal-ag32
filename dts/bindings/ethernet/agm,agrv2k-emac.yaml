@@ -1,0 +1,42 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AgRV2K on-die Ethernet MAC (MAC0 at 0x41040000).
+
+  The MAC block exposes TX/RX descriptor rings, a hardware MDIO
+  controller, and an RMII/MII PHY interface. AgRV2K has exactly one
+  MAC instance; this binding covers it. The MDIO controller is a
+  child node (see agm,agrv2k-mdio.yaml); it shares the parent MAC's
+  AHB gate and the AFSEL on the two pins.
+
+  The driver lives at drivers/ethernet/eth_agm.c and plugs into the
+  Zephyr Ethernet framework via NET_DEVICE_DT_INST_DEFINE().
+
+compatible: "agm,agrv2k-emac"
+
+include: [ethernet-controller.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+  interrupts:
+    required: true
+  agm,ahb-clkenable-bit:
+    required: true
+    type: int
+    description: |
+      Bit in SYS.AHB_CLKENABLE that opens the MAC0 gate (3 on
+      AgRV2K). soc/agm/agrv2k/soc.c opens the gate before any
+      device driver runs.
+  agm,ahb-reset-bit:
+    required: true
+    type: int
+    description: |
+      Bit index in SYS.AHB_RESET (0x03000000 + 0x50) holding MAC0 in
+      reset; write 1 = assert, so bring-up clears it. Same index as
+      agm,ahb-clkenable-bit on AgRV2K (the two registers share a
+      layout for the supported peripherals) -- bit 3, with DMAC0 = 0,
+      USB0 = 1 and CRC0 = 2 as its neighbours.
+  phy-connection-type:
+    default: "rmii"

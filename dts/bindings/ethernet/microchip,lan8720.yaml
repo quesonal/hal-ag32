@@ -1,0 +1,54 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip (formerly SMSC) LAN8720 10/100 Ethernet PHY with RMII interface.
+
+  Same register layout as microchip,lan8742 (the OUI is identical:
+  ID1=0x0007, ID2=0xC0Fx for LAN8720, 0xC13x for LAN8742, both Microchip
+  after SMSC's acquisition). The driver in this module is a slim
+  rewrite of the upstream pattern so the LAN8720 PHY ID is matched
+  explicitly (the LAN8742 driver accepts ID2=0xC0Fx as well, but
+  rejects the revision-mismatch path on init; cleaner to own the
+  compatible).
+
+  This binding only covers the PHY probe / status path. A fabric-soft
+  MAC IP is needed for the TX/RX side and lives outside the scope of
+  the upstream PHY framework.
+
+compatible: "microchip,lan8720"
+
+include: [ethernet-phy-common.yaml]
+
+on-bus: mdio
+
+properties:
+  reg:
+    required: true
+    description: |
+      5-bit MDIO PHY address for the attached PHY. The LAN8720
+      PHYAD[1:0] straps (RXER/PHYAD0, CRS_DV/PHYAD1) are read on
+      reset; PHYAD0/PHYAD1 floating default to address 0. Pick
+      whatever the on-board strapping puts on the bus.
+
+  reset-gpios:
+    type: phandle-array
+    description: |
+      GPIO connected to nRST pin (active-low, open-drain on the chip).
+      The driver pulses it for >= 1 ms then waits 25 ms before the
+      soft reset.
+
+  default-speeds:
+    default: ["10BASE Half-Duplex", "10BASE Full-Duplex", "100BASE Half-Duplex",
+              "100BASE Full-Duplex"]
+    description: |
+      LAN8720 is 10/100 only; 1000BASE entries are ignored.
+
+  energy-detect-mode:
+    type: boolean
+    description: |
+      When present, the driver sets MODE[2:0] = 011b after autoneg
+      completes, putting the PHY into the energy-detect power-down
+      mode when the link is down. Default off (MODE=000b, all
+      capable, autoneg enabled). Maps to LAN8720 reg 17 / 0x11
+      bits[5:3] in some datasheet revisions.

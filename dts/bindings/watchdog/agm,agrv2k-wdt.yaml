@@ -1,0 +1,46 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AGM AgRV2K system watchdog (WDOG0 @ 0x40011000). SP805-style
+  Arm-primecell watchdog: 32-bit down counter clocked by pclk, load
+  register (0x00), control (0x08: INTEN bit0 / RESEN bit1), interrupt
+  clear (0x0C — also reloads the counter) and lock register at 0xC00
+  (unlock key 0x1ACCE551). PLIC IRQ 4; APB clock gate bit 1. See the
+  SDK framework-agrv_sdk/src/watchdog.h.
+
+compatible: "agm,agrv2k-wdt"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  clocks:
+    required: true
+    description: |
+      SYSCLK feed for this block. PBUS_DIVIDER resets to 0, so pclk == SYSCLK:
+      reference the board's clk0 fixed-clock instead of copying the number --
+      the driver reads it with DT_INST_PROP_BY_PHANDLE(n, clocks,
+      clock_frequency), exactly like the UART and CAN drivers. A board that
+      changes SYSCLK only edits &clk0.
+  agm,apb-clkenable-bit:
+    type: int
+    required: true
+    description: |
+      Bit index in SYS.APB_CLKENABLE (0x03000000 + 0x60) gating WDOG0's APB
+      clock (SDK APB_MASK_WATCHDOG0 = bit 1). SoC bring-up opens it; the
+      driver no longer hard-codes the bit. Note the separate
+      SYS.APB_CLKSTOP register, which the driver uses for
+      WDT_OPT_PAUSE_HALTED_BY_DBG -- that stays driver-side.
+
+  clock-frequency:
+    type: int
+    description: |
+      Frequency (Hz) of the APB/PBUS clock feeding the watchdog core
+      (the WdogLoad countdown rate). pclk == SYSCLK (PBUS_DIVIDER
+      reset value 0), 200 MHz on the shipped 407 bitstream.

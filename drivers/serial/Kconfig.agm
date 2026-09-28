@@ -1,0 +1,29 @@
+# AGM AgRV2K UART configuration options
+#
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config UART_AGM
+	bool "AGM AgRV2K UART driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_UART_ENABLED
+	select SERIAL_HAS_DRIVER
+	select SERIAL_SUPPORT_INTERRUPT
+	# The AgRV2K pinctrl driver is a no-op (the FPGA bitstream owns the
+	# mux/pull/drive settings), but agm_uart_init() still calls
+	# pinctrl_apply_state() and the uart0 node still carries pinctrl-0 —
+	# Upstream selects
+	# PINCTRL from the same property on arm,pl011; here it is
+	# unconditional because UART_AGM can only be enabled by an AgRV2K
+	# board, and the module ships the pinctrl binding + SoC glue.
+	select PINCTRL
+	help
+	  Enable the on-die UART (uart0 @ 0x40025000) on AGM AgRV2K SoCs.
+
+	  This is served by drivers/serial/uart_agm.c, a native driver
+	  written against the PL011-compatible register map of the IP that
+	  AgRV2K integrates. It replaces CONFIG_UART_PL011 for AGM boards:
+	  the uart0 node's compatible is "agm,agrv2k-uart", so
+	  CONFIG_UART_PL011's DT_HAS_ARM_PL011_ENABLED /
+	  DT_HAS_ARM_SBSA_UART_ENABLED dependency is not met and the two
+	  drivers can never claim the same node.

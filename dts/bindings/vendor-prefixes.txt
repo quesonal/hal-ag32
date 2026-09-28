@@ -1,0 +1,12 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Vendor prefixes owned by this module. Zephyr merges every
+# <dts_root>/dts/bindings/vendor-prefixes.txt it finds into one map
+# (cmake/modules/dts.cmake appends one --vendor-prefixes per dts_root,
+# gen_edt.py update()s them together), so keeping the AGM prefix here
+# lets the module own its bindings end to end instead of patching the
+# in-tree dts/bindings/vendor-prefixes.txt.
+#
+# Format: <prefix><TAB><vendor name>, '#' comments allowed.
+agm	AGM AgRV2K SoC vendor

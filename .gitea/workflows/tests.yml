@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: Apache-2.0
+name: tests
+
+# Gitea Actions (same syntax as GitHub Actions; inert until an act_runner is
+# registered -- see the note in pin-routing.yml). Two gates that need no board:
+#
+#   host-tools  tools/tests (pytest): the wire formats of agm_upload.py and
+#               smp_cli.py, plus sign_image.py's two profiles (which need
+#               imgtool and cryptography -- the same packages the tool itself
+#               requires, see tools/sign_image.py).
+#   native      tests/drivers/misc/boot_agm (ztest on native_sim): the driver's
+#               storage API and the AN3155 server, against two simulated
+#               flashes and an emulated console UART.
+#
+# The native job builds a west workspace by cloning this repository as the
+# manifest (what `west init -m <repo>` does for a developer) and
+# lets `west update` fetch Zephyr at the SHA west.yml pins: network access and a
+# few hundred MB. Two things the runner has to provide: credentials to clone
+# this repository (Gitea hands Actions a token, wired in by the insteadOf rule
+# below -- drop it if the instance allows anonymous clones) and a `native_sim`
+# toolchain, i.e. plain host gcc. It tests `main` rather than $GITHUB_SHA
+# because west passes --mr to `git clone --branch`, which takes branch and tag
+# names only ("Remote branch <sha> not found").
+# The board half of the regression (tools/ + samples/ on hardware) stays a
+# developer step.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: dependencies
+        run: python3 -m pip install --quiet --disable-pip-version-check \
+                 pytest pyserial cbor2 cryptography imgtool
+      - name: host tool tests
+        run: python3 -m pytest tools/tests -q
+
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: dependencies
+        run: python3 -m pip install --quiet --disable-pip-version-check west pyelftools
+      - name: workspace
+        run: |
+          git config --global \
+              url."https://x-access-token:${{ github.token }}@${GITHUB_SERVER_URL#http*://}/".insteadOf \
+              "$GITHUB_SERVER_URL/"
+          west init -m "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --mr main ws
+          cd ws
+          west update --narrow -o=--depth=1
+          python3 -m pip install --quiet --disable-pip-version-check \
+              -r zephyr/scripts/requirements.txt
+      - name: native protocol + driver tests
+        run: |
+          cd ws
+          west twister -T modules/hal_ag32/tests -p native_sim -O /tmp/tw_native \
+              --inline-logs

@@ -1,0 +1,31 @@
+# AGM AgRV2K CRC driver
+#
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config CRC_AGM
+	bool "AGM AgRV2K CRC driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_CRC_ENABLED
+	select CRC_DRIVER_HAS_CRC32_IEEE
+	help
+	  CRC calculation unit in the AgRV2K SYS block,
+	  STM32-CRC compatible: DR/IDR/CR/INIT/POL, programmable polynomial size
+	  (7/8/16/32) and seed, byte/half-word/word input reversal, bit-level
+	  output reversal, 4 AHB clocks per 32-bit feed.
+
+	  This driver claims CRC-32/ISO-HDLC (Zephyr's CRC32_IEEE) only, verified
+	  on hardware against the standard check value 0xCBF43926 and against the
+	  software implementation over 64 B and 99944 B buffers. Other algorithms
+	  return -ENOTSUP until they are measured.
+
+	  Enabling it also flips Zephyr's own crc32_ieee() to hardware: with a
+	  zephyr,crc chosen node present, CRC_HW_HANDLER selects CRC_DRIVER and
+	  subsys/crc/crc_hardware.c replaces the weak software implementation --
+	  no caller changes. On the loader's boot path the 99944 B fabric CRC
+	  drops from 13.39 M cycles (67 ms) to 0.70 M (3.5 ms).
+
+	  The unit is initialised at PRE_KERNEL_1 (priority below zero) because the
+	  fabric verifier runs from
+	  soc.c's PRE_KERNEL_1 hook, before normal device init; soc.c opens the
+	  unit's AHB clock gate before that check (see agm,ahb-clkenable-bit).

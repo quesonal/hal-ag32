@@ -1,0 +1,54 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Devicetree for the native I2C suite: the real controller address
+ * (0x4002b000 = I2C0), the real binding and the real pinctrl state shape
+ * (i2c0_default: GPIO3 bits 4/5 with AGM_PINCTRL_NO_DIR, because the
+ * open-drain pins' direction belongs to the IP).
+ *
+ * The node keeps its `interrupts` because the binding requires one; this
+ * driver polls and never connects it. The IRQ number is native_sim's range,
+ * not the SoC's (PLIC 30).
+ */
+
+#include <zephyr/dt-bindings/pinctrl/agm-agrv2k-pinctrl.h>
+
+/ {
+	fake_intc: interrupt-controller {
+		compatible = "vnd,fake-intc";
+		interrupt-controller;
+		#interrupt-cells = <2>;
+	};
+
+	fake_clk: clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+	};
+
+	agm_pinctrl: pinctrl {
+		compatible = "agm,agrv2k-pinctrl";
+		status = "okay";
+
+		i2c0_default: i2c0_default {
+			agm,pins = <AGM_PINCTRL(3, 4, AGM_PINCTRL_NO_DIR)>,
+				   <AGM_PINCTRL(3, 5, AGM_PINCTRL_NO_DIR)>;
+		};
+	};
+
+	i2c_agm0: i2c@4002b000 {
+		compatible = "agm,agrv2k-i2c";
+		reg = <0x4002b000 0x14>;
+		interrupts = <9 1>;
+		interrupt-names = "i2c";
+		interrupt-parent = <&fake_intc>;
+		clocks = <&fake_clk>;
+		clock-frequency = <100000>;
+		agm,apb-clkenable-bit = <4>;	/* APB_MASK_I2C0 on the real part */
+		pinctrl-0 = <&i2c0_default>;
+		pinctrl-names = "default";
+		/* Required by i2c-controller.yaml (the node is a bus). */
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+	};
+};

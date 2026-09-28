@@ -1,0 +1,11 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config I2C_AGM
+	bool "AGM AgRV2K I2C driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_I2C_ENABLED
+	select PINCTRL
+	help
+	  Enable the OpenCores-style I2C master controller driver for
+	  the AGM AgRV2K SoC.

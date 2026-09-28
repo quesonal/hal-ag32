@@ -1,0 +1,43 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AgRV2K USB0 host controller. Same silicon block as agm,agrv2k-usb0 (the
+  FSL/ChipIdea-like dual-role controller), but driven in host mode through
+  the EHCI-compatible operational registers (USBCMD/USBSTS/PORTSC, the
+  asynchronous queue-head list and the periodic frame list).
+
+  Kept as a *separate* node from the device-mode agm,agrv2k-usb0 even though
+  both live at 0x4100_1000: one devicetree node may only back one driver
+  (DEVICE_DT_INST_DEFINE names devices by node ordinal, so two drivers on one
+  node collide at link time), and the role is chosen by which node an
+  application enables. A build must enable exactly one of the two.
+
+compatible: "agm,agrv2k-uhc"
+
+include: [usb-controller.yaml]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  agm,ahb-clkenable-bit:
+    type: int
+    required: true
+    description: |
+      Bit index in SYS.AHB_CLKENABLE (0x03000000 + 0x70) gating USB0's AHB
+      clock. USB0 is bit 1; the neighbouring bits belong to other peripherals
+      (DMAC0 = 0, CRC0 = 2, MAC0 = 3), so a value other than 1 would gate the
+      wrong block.
+    enum: [1]
+
+  agm,ahb-reset-bit:
+    type: int
+    required: true
+    description: |
+      Bit index in SYS.AHB_RESET (0x03000000 + 0x50) holding USB0 in reset;
+      write 1 = assert, so bring-up clears it (bit 1, same index as the gate).
+    enum: [1]

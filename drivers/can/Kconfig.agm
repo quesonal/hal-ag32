@@ -1,0 +1,24 @@
+# AgRV2K CAN controller configuration options
+#
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config CAN_AGRV2K
+	bool "AgRV2K CAN (SJA1000-compatible PeliCAN) driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_CAN_ENABLED
+	select CAN_SJA1000
+	select PINCTRL
+	help
+	  Enable support for the on-die CAN controller on AgRV2K SoCs.
+	  The IP is register-compatible with the NXP SJA1000 in
+	  PeliCAN mode; this driver is a thin frontend that plugs into
+	  the shared can_sja1000.c state machine.
+
+	  End-to-end verification goes through the controller's
+	  MOD_SELFTEST (self-test) mode, exposed as CAN_MODE_LOOPBACK
+	  through the upstream Zephyr CAN API — but it still needs a bus
+	  the controller reads as idle: with nothing attached to the CAN
+	  pins the transmitter never starts (SR.TS stuck, no error
+	  counters). Keep the transceiver/peer on the
+	  pins, as on the dev board. See samples/can_loopback/.

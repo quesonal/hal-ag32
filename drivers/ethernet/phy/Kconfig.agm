@@ -1,0 +1,76 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# LAN8720 PHY driver — AgRV2K-side stub of the upstream
+# microchip,lan8742 driver pattern (registers are identical, the
+# OUI is the same, only the revision bits in ID2 differ).
+#
+# The driver handles PHY reset + ID probe + autoneg + link status
+# polling, nothing else: AgRV2K has no built-in Ethernet MAC, so a
+# fabric-soft MAC IP is needed for TX/RX, and that is *not* gated
+# here. This Kconfig only enables the PHY probe path so the wiring
+# (MDC/MDIO + nRST, MDIO bit-banged over GPIO via the upstream
+# zephyr,mdio-gpio driver) can be verified before commissioning the
+# fabric IP.
+
+# Module-local timeout knobs. The upstream PHY framework puts these
+# inside the `menuconfig ETH_PHY_DRIVER` block (which depends on
+# NETWORKING -> ETH_DRIVER -> ETH_PHY_DRIVER), but this driver is
+# probe-only and should not pull in the networking stack, so we
+# declare our own scope here. The names match the upstream symbols
+# so the driver code can stay generic.
+if PHY_AGM_LAN8720
+
+config PHY_AUTONEG_TIMEOUT_MS
+	int "LAN8720 autoneg completion timeout (ms)"
+	default 4000
+	help
+	  How long the driver waits for the PHY to clear the
+	  AUTONEG_COMPLETE bit in BMSR after kicking off autoneg
+	  before giving up and reporting -ETIMEDOUT.
+
+config PHY_MONITOR_PERIOD
+	int "LAN8720 link monitor poll period (ms)"
+	default 500
+	help
+	  Period of the link-state monitor work item when no
+	  autoneg is in flight. Polled-only for now — the LAN8720
+	  nINT/EXT_INT pin is open-drain and tying it to a PLIC
+	  line would require another fabric MAC register.
+
+# Upstream declares this inside the ETH_PHY_DRIVER menuconfig (which
+# we deliberately don't pull in for the probe-only driver); declare it
+# locally so the driver init can reference it.
+config PHY_INIT_PRIORITY
+	int "LAN8720 PHY driver init priority"
+	default 60
+	help
+	  Device init priority for the LAN8720 PHY. Lower than the
+	  net stack so the bus is up before any MAC tries to use it.
+
+	  Not a free knob: the PHY device is what the MAC's boot-time
+	  consumer waits on, and net_if_carrier_* events from its monitor
+	  work drive the MAC's CTRL register. Keep it below the MAC's
+	  CONFIG_ETH_INIT_PRIORITY.
+
+	  (The GPIO reset, the MII soft reset and the ID probe used to run
+	  *inline* in phy_agm_lan8720_init() -- 25 ms + a 50 ms soft-reset
+	  poll per attempt, ~0.4 s with no PHY answering -- so that this
+	  priority also sized a sleeping init. They run from the monitor
+	  work's first pass since.)
+
+endif # PHY_AGM_LAN8720
+
+config PHY_AGM_LAN8720
+	bool "AGM LAN8720 10/100 Ethernet PHY driver"
+	default y
+	depends on DT_HAS_MICROCHIP_LAN8720_ENABLED
+	select MDIO
+	select GPIO
+	help
+	  Enable the Microchip (formerly SMSC) LAN8720 PHY driver. Implements
+	  the Zephyr PHY framework: init (hard + soft reset, ID1/ID2 read),
+	  cfg_link (autoneg, advertised speeds), get_link (BMSR + speed/duplex
+	  decode), and read/write through the parent MDIO bus.
+
+	  RX/TX data path requires a fabric-soft MAC IP — out of scope here.

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.watchdog.wdt_agm.native:
+    platform_allow:
+      - native_sim
+    tags:
+      - watchdog
+      - hal_ag32

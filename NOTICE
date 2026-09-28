@@ -1,0 +1,62 @@
+hal_ag32 — NOTICE
+================
+
+This repository is licensed under the Apache License, Version 2.0 (see
+LICENSE). Its C sources, devicetree, CMake, Kconfig and script files all
+carry an SPDX-License-Identifier: Apache-2.0 tag; the machine-readable
+metadata that Zephyr's own tree also ships without one (board.yml,
+soc.yml, sample prj.conf) does not, and
+boards/agm/agrv2k/shared/agrv_fpga_decomp.inc is generated output.
+
+Two things are worth stating explicitly, because this module targets the
+AGM AgRV2K SoC and was written with the vendor SDK and vendor
+documentation at hand.
+
+
+1. UART driver
+--------------
+
+  drivers/serial/uart_agm.c
+
+is a native driver written against the publicly documented ARM PrimeCell
+PL011 register map (DR / RSR / FR / IBRD / FBRD / LCR_H / CR / IMSC /
+RIS / MIS / ICR — see dts/riscv/agm/agrv2k.dtsi for the address). No
+source from upstream Zephyr is copied into this file.
+
+The remaining drivers (drivers/{can,counter,dma,i2c,pwm,usb/udc,watchdog})
+and the SoC glue (soc/agm/agrv2k/) are written for this module; they link
+against, but do not copy, in-tree Zephyr code (can_sja1000.c,
+udc_common.c); that dependency list is in `the development notes
+(not published here)`.
+
+2. Vendor material that is NOT distributed here
+-----------------------------------------------
+
+This repository does not distribute the AgRV PlatformIO SDK
+("AgRV_pio") or any of its packages, nor any AGM/AgRV vendor document.
+That includes, but is not limited to:
+
+  * framework-agrv_sdk / framework-agrv_ips — the vendor SDK headers and
+    startup/clock sources that this port's SoC code was written against
+  * tool-agrv_logic — the Supra logic/bitstream toolchain, which is
+    node-locked (the SDK ships a LICENSE_NODE_LOCKED blob)
+  * tool-agrv_openocd — the vendor OpenOCD build
+  * tool-agrv_jlink and the SEGGER RTT sources — SEGGER Microcontroller
+    GmbH terms apply
+  * the AGM/AGRV vendor documents (reference manual, VE configuration and
+    logic notes, pinout tables, datasheets)
+
+The tools and documents this module refers to must be obtained by the
+user from AGM / the vendor (https://www.alta-gate.com) or with the SDK,
+and are governed by their own terms. This module only invokes them at
+build/flash time.
+
+Provenance note: the AGM driver and SoC code here is a behavioural
+re-implementation informed by the vendor SDK and vendor documentation.
+No vendor or third-party source text was copied into this repository —
+the only lines shared with the SDK's AGM-authored code are two array
+comparisons in samples/slave_spi (whose example is under the vendor
+platform manifest's Apache-2.0 declaration). The vendor SDK's
+framework packages themselves ship no license file and no SPDX headers;
+if you redistribute parts of this module, keep the points above in mind
+and get your own legal reading on the SDK if that matters to you.

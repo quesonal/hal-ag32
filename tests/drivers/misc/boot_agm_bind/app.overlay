@@ -1,0 +1,81 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Devicetree for the per-chip binding suite: the same two simulated flashes
+ * the signed-image suite uses, at the same addresses.
+ *
+ * The addresses are the real ones (the on-die flash is mapped at 0x80000000,
+ * the application slot at 0x80030000), and they have to match: the containers
+ * this suite pushes are the *fixtures* of tests/drivers/misc/boot_agm_ecdsa,
+ * and their `ih_load_addr` is 0x80030020 -- the publish path refuses a
+ * container linked for another address, which is a different check from the
+ * one under test here.
+ *
+ * The on-die flash is the real 1 MiB because the bind-salt sector is the last
+ * element of the layout's A/B chain (0x800b0000 by default, right after the
+ * boot record), which only fits in a flash of that
+ * size.
+ */
+
+/ {
+	chosen {
+		zephyr,console = &emul_uart;
+	};
+
+	emul_uart: uart-emul {
+		compatible = "zephyr,uart-emul";
+		status = "okay";
+		tx-fifo-size = <1024>;
+		rx-fifo-size = <1024>;
+	};
+
+	sim_store: sim-flash-store {
+		compatible = "zephyr,sim-flash";
+		erase-value = <0xff>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		status = "okay";
+
+		sim_store_array: flash@0 {
+			compatible = "soc-nv-flash";
+			reg = <0x0 0x20000>;
+			erase-block-size = <4096>;
+			write-block-size = <4>;
+		};
+	};
+
+	sim_ondie: sim-flash-ondie {
+		compatible = "zephyr,sim-flash";
+		erase-value = <0xff>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		status = "okay";
+
+		sim_ondie_array: flash@0 {
+			compatible = "soc-nv-flash";
+			reg = <0x0 0x100000>;
+			erase-block-size = <4096>;
+			write-block-size = <4>;
+		};
+	};
+
+	boot: boot {
+		compatible = "agm,agrv2k-boot";
+		status = "okay";
+
+		store-flash = <&sim_store>;
+		on-die-flash = <&sim_ondie>;
+		on-die-flash-base = <0x80000000>;
+
+		record-offset = <0x000000>;
+		record-size = <0x001000>;
+		store-a-offset = <0x002000>;
+		store-b-offset = <0x00a000>;
+		store-max-size = <0x008000>;
+
+		slot-address = <0x80030000>;
+		slot-size = <0x00010000>;
+
+		bitstream-address = <0x800e7000>;
+		bitstream-size = <0x00019000>;
+	};
+};

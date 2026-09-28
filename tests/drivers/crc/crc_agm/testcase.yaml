@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.crc.crc_agm.native:
+    platform_allow:
+      - native_sim
+    tags:
+      - crc
+      - hal_ag32

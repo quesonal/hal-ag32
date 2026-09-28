@@ -1,0 +1,229 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# SoC-side AF pin table for AgRV2K: the complete set of alternate
+# functions the GPIO block can hand a pin to, and the bank/bit each one
+# uses.
+#
+# This is the half of the routing the *bitstream cannot change*: the
+# fabric decides which pin a function lands on and whether it is routed
+# at all, but the function's AFSEL bank/bit is fixed in silicon and is
+# listed in the vendor SDK as the
+#
+#   <FUNC>_AF_GPIO       bank
+#   <FUNC>_AF_GPIO_MASK  (0x1 << bit)
+#   <FUNC>_AF_GPIO_{INPUT,OUTPUT,INOUT}
+#
+# triple. Source: framework-agrv_sdk/src/AltaRiscv.h (all 114 triples,
+# lines ~497-951). tools/check_af_table.py re-parses that header and
+# fails if this file drifts from it -- run it after touching either one.
+#
+# Why checked in rather than parsed at run time: CI and a firmware-only
+# checkout must not need the vendor SDK.
+#
+# Fields:
+#   bank, bit  GPIO bank 0..9 and bit 0..7 of the AFSEL bit (required)
+#   sdk        the header's direction marker: in | out | inout (required)
+#   dir        what the pinctrl cell writes (see the encoding below).
+#              Required as soon as `state` is set -- the cell is really
+#              emitted, and DIR is a decision with hardware consequences
+#              (the SDK's GPIO_AF_ENABLE() writes AFSEL only and leaves
+#              DIR to the caller, so this half is ours to make).
+#              Scope: this is the direction *under AFSEL=1*, i.e. while
+#              the peripheral owns the pin. AFSEL=0 goes back to the GPIO
+#              DATA register (which board.ve's cpld-signals may drive as
+#              well), and the fabric can always read the pin through the
+#              wrapper's bidir wire -- so `output` does not mean "this pin
+#              can only ever drive".
+#   state      the dts pinctrl state that currently owns this function;
+#              tools/generate_pinctrl_dtsi.py renders those cells.
+#              Optional: a function with no state is still listed, it is
+#              just not routed into a state yet.
+#
+# `dir` values mirror the AGM_PINCTRL_* encodings:
+#   input   -> one cell, DIR written 0
+#   output  -> one cell, DIR written 1
+#   no-dir  -> one cell, DIR untouched (the IP owns the tri-state)
+#   bidir   -> two cells (OUT then IN) on the same bank/bit. The order is
+#              not cosmetic: pinctrl_configure_pins() writes DIR once per
+#              cell, so the last cell of a row is the DIR the pin is left
+#              with. compare_state() fails a same-row pair that comes back
+#              in the other order.
+#
+# A function is *only* an alternate function. Names of the form
+# GPIOb_n and USB0_ID have no AFSEL bit at all -- they are fabric pin
+# signals that go into board.ve (case A) without a pinctrl cell, so
+# they have no row here by construction. The tools report them as
+# "no AF entry" notes instead of silently ignoring them.
+
+af_pins:
+  # --- SPI0 / SPI1 (boot flash + user SPI; AltaRiscv.h:497-525) ---------
+  # SCK/CSN are plain outputs. The IO0/IO2/IO3 pins are INOUT in the
+  # header, but on this SoC the SPI IP only drives them once AFSEL hands
+  # the pin over (: leaving DIR at reset on SI/WP#/
+  # HOLD# makes the engine finish with RDID = 00 00 00 -- MOSI never
+  # drives), so they are outputs here. SO_IO1 (MISO) keeps DIR untouched.
+  SPI0_SI_IO0:    { bank: 0, bit: 0, sdk: inout, dir: output, state: spi0_default }
+  SPI0_SO_IO1:    { bank: 0, bit: 1, sdk: inout, dir: no-dir, state: spi0_default }
+  SPI0_WPN_IO2:   { bank: 0, bit: 2, sdk: inout, dir: output, state: spi0_default }
+  SPI0_HOLDN_IO3: { bank: 0, bit: 3, sdk: inout, dir: output, state: spi0_default }
+  SPI0_SCK:       { bank: 4, bit: 5, sdk: out,   dir: output, state: spi0_default }
+  SPI0_CSN:       { bank: 4, bit: 6, sdk: out,   dir: output, state: spi0_default }
+
+  SPI1_SI_IO0:    { bank: 0, bit: 4, sdk: inout, dir: output, state: spi1_default }
+  SPI1_SO_IO1:    { bank: 0, bit: 5, sdk: inout, dir: no-dir, state: spi1_default }
+  SPI1_WPN_IO2:   { bank: 0, bit: 6, sdk: inout, dir: output, state: spi1_default }
+  SPI1_HOLDN_IO3: { bank: 0, bit: 7, sdk: inout, dir: output, state: spi1_default }
+  SPI1_SCK:       { bank: 4, bit: 7, sdk: out,   dir: output, state: spi1_default }
+  SPI1_CSN:       { bank: 5, bit: 0, sdk: out,   dir: output, state: spi1_default }
+
+  # --- I2C0 / I2C1 (open-drain; the IP owns the pin direction) ----------
+  I2C0_SCL: { bank: 3, bit: 4, sdk: inout, dir: no-dir, state: i2c0_default }
+  I2C0_SDA: { bank: 3, bit: 5, sdk: inout, dir: no-dir, state: i2c0_default }
+  I2C1_SCL: { bank: 3, bit: 6, sdk: inout, dir: no-dir, state: i2c1_default }
+  I2C1_SDA: { bank: 3, bit: 7, sdk: inout, dir: no-dir, state: i2c1_default }
+
+  # --- UART0 console (AltaRiscv.h:741/845) ------------------------------
+  # DIR must be written for TX (with DIR=0 the PL011 reports
+  # TXFE but the pin stays silent -- see soc/agm/agrv2k/pinctrl.c).
+  # NUARTRTS/NUARTCTS are hardware flow control and are not routed by
+  # any bitstream today, so they carry no state.
+  UART0_NUARTCTS: { bank: 6, bit: 0, sdk: in }
+  UART0_UARTRXD:  { bank: 6, bit: 1, sdk: in,  dir: input,  state: uart0_default }
+  UART0_NUARTRTS: { bank: 7, bit: 5, sdk: out }
+  UART0_UARTTXD:  { bank: 7, bit: 6, sdk: out, dir: output, state: uart0_default }
+
+  # --- UART1..UART4 -----------------------------------------------------
+  # UART1 is declared in the shared board pin list; none of these has a
+  # dts pinctrl state yet (no node enables them), hence no `dir`.
+  UART1_NUARTCTS: { bank: 6, bit: 2, sdk: in }
+  UART1_UARTRXD:  { bank: 6, bit: 3, sdk: in }
+  UART1_NUARTRTS: { bank: 7, bit: 7, sdk: out }
+  UART1_UARTTXD:  { bank: 8, bit: 0, sdk: out }
+
+  UART2_NUARTCTS: { bank: 6, bit: 4, sdk: in }
+  UART2_UARTRXD:  { bank: 6, bit: 5, sdk: in }
+  UART2_NUARTRTS: { bank: 8, bit: 1, sdk: out }
+  UART2_UARTTXD:  { bank: 8, bit: 2, sdk: out }
+
+  UART3_NUARTCTS: { bank: 6, bit: 6, sdk: in }
+  UART3_UARTRXD:  { bank: 6, bit: 7, sdk: in }
+  UART3_NUARTRTS: { bank: 8, bit: 3, sdk: out }
+  UART3_UARTTXD:  { bank: 8, bit: 4, sdk: out }
+
+  UART4_NUARTCTS: { bank: 7, bit: 0, sdk: in }
+  UART4_UARTRXD:  { bank: 7, bit: 1, sdk: in }
+  UART4_NUARTRTS: { bank: 8, bit: 5, sdk: out }
+  UART4_UARTTXD:  { bank: 8, bit: 6, sdk: out }
+
+  # --- CAN0 (SJA1000-compatible controller) -----------------------------
+  CAN0_INT_IN: { bank: 7, bit: 2, sdk: in }
+  CAN0_RX0:    { bank: 7, bit: 3, sdk: in,  dir: input,  state: can0_default }
+  CAN0_TX0:    { bank: 8, bit: 7, sdk: out, dir: output, state: can0_default }
+  CAN0_TX1:    { bank: 9, bit: 0, sdk: out }
+
+  # --- MAC0 (RMII and MII signals) --------------------------------------
+  # NOTE: MAC0_RX_CLK is listed because the SoC has an AFSEL bit for it,
+  # but the dev bitstream does not route it (no such top-level port) and
+  # the vendor VE says not to assign it in RMII: REF_CLK arrives on the
+  # TX_CLK port. That is why it carries no `state` -- a state with (7,6)
+  # in it would be a ghost cell, and GPIO7 bit 6 is this board's UART0 TX.
+  #
+  # `dir` follows what the hardware-verified eth0_default does: outputs
+  # for the TX-side signals the MAC drives, no-dir for pins the IP
+  # tri-states or the PHY drives (MDIO is bidir = OUT + IN cells).
+  MAC0_PHY_INTB: { bank: 7, bit: 4, sdk: in }
+  MAC0_RX_CLK:   { bank: 7, bit: 6, sdk: in }
+  MAC0_RXD0:     { bank: 7, bit: 7, sdk: in,    dir: no-dir, state: eth0_default }
+  MAC0_RXD1:     { bank: 8, bit: 0, sdk: in,    dir: no-dir, state: eth0_default }
+  MAC0_RXD2:     { bank: 8, bit: 1, sdk: in }
+  MAC0_RXD3:     { bank: 8, bit: 2, sdk: in }
+  # NOTE: MAC0_RX_DV has an AFSEL bit too (8.3), but no `state`: this
+  # design runs RMII, and the PHY's CRS_DV line is what the MAC samples --
+  # it arrives on MAC0_CRS (GPIO8_5), which eth0_default does carry. (8.3)
+  # belongs to the MII-side RX_DV row in the vendor header; a state that
+  # carried it would AFSEL a pin this board does not bring out.
+  MAC0_RX_DV:    { bank: 8, bit: 3, sdk: in }
+  MAC0_RX_ER:    { bank: 8, bit: 4, sdk: in }
+  MAC0_CRS:      { bank: 8, bit: 5, sdk: in,    dir: no-dir, state: eth0_default }
+  MAC0_COL:      { bank: 8, bit: 6, sdk: in }
+  MAC0_TXD0:     { bank: 9, bit: 1, sdk: out,   dir: output, state: eth0_default }
+  MAC0_TXD1:     { bank: 9, bit: 2, sdk: out,   dir: output, state: eth0_default }
+  MAC0_TXD2:     { bank: 9, bit: 3, sdk: out }
+  MAC0_TXD3:     { bank: 9, bit: 4, sdk: out }
+  MAC0_TX_EN:    { bank: 9, bit: 5, sdk: out,   dir: output, state: eth0_default }
+  MAC0_TX_ER:    { bank: 9, bit: 6, sdk: out }
+  MAC0_MDC:      { bank: 9, bit: 7, sdk: out,   dir: output, state: eth0_default }
+  MAC0_MDIO:     { bank: 4, bit: 0, sdk: inout, dir: bidir,  state: eth0_default }
+  MAC0_TX_CLK:   { bank: 7, bit: 5, sdk: in,    dir: no-dir, state: eth0_default }
+
+  # --- GPTIMER0..4 ------------------------------------------------------
+  # Two families, easy to confuse:
+  #   GPTIMERx_CHy   CH0..3 = the OCx outputs, four consecutive bits of
+  #                  one bank (0 -> GPIO1 0..3, 1 -> GPIO1 4..7,
+  #                  2 -> GPIO2 0..3, 3 -> GPIO2 4..7, 4 -> GPIO3 0..3).
+  #                  These are what the pwm states carry.
+  #   GPTIMERx_CHNy  CHN0..3 = the complementary outputs, banks 5..7.
+  #   GPTIMERx_BRK/ETR/OCREF_CLR = break input, external trigger and
+  #                  OCREF clear: inputs on banks 4/5.
+  # Of the OCx channels only GPTIMER1_CH0 has a pin in the shipped
+  # bitstream (VE: "GPTIMER1_CH0 PIN_7"); the others still carry their
+  # state so a board whose bitstream routes them can use them as-is.
+  GPTIMER0_CH0: { bank: 1, bit: 0, sdk: inout, dir: no-dir, state: gpt0_pwm_default }
+  GPTIMER0_CH1: { bank: 1, bit: 1, sdk: inout, dir: no-dir, state: gpt0_pwm_default }
+  GPTIMER0_CH2: { bank: 1, bit: 2, sdk: inout, dir: no-dir, state: gpt0_pwm_default }
+  GPTIMER0_CH3: { bank: 1, bit: 3, sdk: inout, dir: no-dir, state: gpt0_pwm_default }
+  GPTIMER0_BRK: { bank: 4, bit: 1, sdk: in }
+  GPTIMER0_ETR: { bank: 4, bit: 2, sdk: in }
+  GPTIMER0_OCREF_CLR: { bank: 4, bit: 3, sdk: in }
+  GPTIMER0_CHN0: { bank: 5, bit: 1, sdk: out }
+  GPTIMER0_CHN1: { bank: 5, bit: 2, sdk: out }
+  GPTIMER0_CHN2: { bank: 5, bit: 3, sdk: out }
+  GPTIMER0_CHN3: { bank: 5, bit: 4, sdk: out }
+
+  GPTIMER1_CH0: { bank: 1, bit: 4, sdk: inout, dir: no-dir, state: gpt1_pwm_default }
+  GPTIMER1_CH1: { bank: 1, bit: 5, sdk: inout, dir: no-dir, state: gpt1_pwm_default }
+  GPTIMER1_CH2: { bank: 1, bit: 6, sdk: inout, dir: no-dir, state: gpt1_pwm_default }
+  GPTIMER1_CH3: { bank: 1, bit: 7, sdk: inout, dir: no-dir, state: gpt1_pwm_default }
+  GPTIMER1_BRK: { bank: 4, bit: 4, sdk: in }
+  GPTIMER1_ETR: { bank: 4, bit: 5, sdk: in }
+  GPTIMER1_OCREF_CLR: { bank: 4, bit: 6, sdk: in }
+  GPTIMER1_CHN0: { bank: 5, bit: 5, sdk: out }
+  GPTIMER1_CHN1: { bank: 5, bit: 6, sdk: out }
+  GPTIMER1_CHN2: { bank: 5, bit: 7, sdk: out }
+  GPTIMER1_CHN3: { bank: 6, bit: 0, sdk: out }
+
+  GPTIMER2_CH0: { bank: 2, bit: 0, sdk: inout, dir: no-dir, state: gpt2_pwm_default }
+  GPTIMER2_CH1: { bank: 2, bit: 1, sdk: inout, dir: no-dir, state: gpt2_pwm_default }
+  GPTIMER2_CH2: { bank: 2, bit: 2, sdk: inout, dir: no-dir, state: gpt2_pwm_default }
+  GPTIMER2_CH3: { bank: 2, bit: 3, sdk: inout, dir: no-dir, state: gpt2_pwm_default }
+  GPTIMER2_BRK: { bank: 4, bit: 7, sdk: in }
+  GPTIMER2_ETR: { bank: 5, bit: 0, sdk: in }
+  GPTIMER2_OCREF_CLR: { bank: 5, bit: 1, sdk: in }
+  GPTIMER2_CHN0: { bank: 6, bit: 1, sdk: out }
+  GPTIMER2_CHN1: { bank: 6, bit: 2, sdk: out }
+  GPTIMER2_CHN2: { bank: 6, bit: 3, sdk: out }
+  GPTIMER2_CHN3: { bank: 6, bit: 4, sdk: out }
+
+  GPTIMER3_CH0: { bank: 2, bit: 4, sdk: inout, dir: no-dir, state: gpt3_pwm_default }
+  GPTIMER3_CH1: { bank: 2, bit: 5, sdk: inout, dir: no-dir, state: gpt3_pwm_default }
+  GPTIMER3_CH2: { bank: 2, bit: 6, sdk: inout, dir: no-dir, state: gpt3_pwm_default }
+  GPTIMER3_CH3: { bank: 2, bit: 7, sdk: inout, dir: no-dir, state: gpt3_pwm_default }
+  GPTIMER3_BRK: { bank: 5, bit: 2, sdk: in }
+  GPTIMER3_ETR: { bank: 5, bit: 3, sdk: in }
+  GPTIMER3_OCREF_CLR: { bank: 5, bit: 4, sdk: in }
+  GPTIMER3_CHN0: { bank: 6, bit: 5, sdk: out }
+  GPTIMER3_CHN1: { bank: 6, bit: 6, sdk: out }
+  GPTIMER3_CHN2: { bank: 6, bit: 7, sdk: out }
+  GPTIMER3_CHN3: { bank: 7, bit: 0, sdk: out }
+
+  GPTIMER4_CH0: { bank: 3, bit: 0, sdk: inout, dir: no-dir, state: gpt4_pwm_default }
+  GPTIMER4_CH1: { bank: 3, bit: 1, sdk: inout, dir: no-dir, state: gpt4_pwm_default }
+  GPTIMER4_CH2: { bank: 3, bit: 2, sdk: inout, dir: no-dir, state: gpt4_pwm_default }
+  GPTIMER4_CH3: { bank: 3, bit: 3, sdk: inout, dir: no-dir, state: gpt4_pwm_default }
+  GPTIMER4_BRK: { bank: 5, bit: 5, sdk: in }
+  GPTIMER4_ETR: { bank: 5, bit: 6, sdk: in }
+  GPTIMER4_OCREF_CLR: { bank: 5, bit: 7, sdk: in }
+  GPTIMER4_CHN0: { bank: 7, bit: 1, sdk: out }
+  GPTIMER4_CHN1: { bank: 7, bit: 2, sdk: out }
+  GPTIMER4_CHN2: { bank: 7, bit: 3, sdk: out }
+  GPTIMER4_CHN3: { bank: 7, bit: 4, sdk: out }

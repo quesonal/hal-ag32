@@ -1,0 +1,86 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Devicetree for the native SMP-server test: same stand-in layout as the api
+ * suite (tests/drivers/misc/boot_agm/app.overlay -- two zephyr,sim-flash
+ * devices behind the real addresses), kept in step with it on purpose so a
+ * layout change lands in both.
+ *
+ * What differs is only what this suite needs: the console is the emulated UART
+ * the server writes its replies into (and nothing else here talks on it).
+ */
+
+/ {
+	chosen {
+		zephyr,console = &emul_uart;
+	};
+
+	/* The driver selects CONFIG_BOOT_AGM_TRIAL_WATCHDOG by default when the
+	 * node exists, and its boot-path hooks are weak -- this suite never
+	 * boots, so the node is only here to keep the two overlays identical. */
+	iwdg0: watchdog@40000034 {
+		compatible = "agm,agrv2k-iwdg";
+		reg = <0x40000034 0x2>;
+		agm,prescaler = <64>;
+		agm,clk-source = "lsi";
+		agm,freeze-mode = "stop";
+		status = "okay";
+	};
+
+	emul_uart: uart-emul {
+		compatible = "zephyr,uart-emul";
+		status = "okay";
+		tx-fifo-size = <1024>;
+		rx-fifo-size = <1024>;
+	};
+
+	sim_store: sim-flash-store {
+		compatible = "zephyr,sim-flash";
+		erase-value = <0xff>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		status = "okay";
+
+		sim_store_array: flash@0 {
+			compatible = "soc-nv-flash";
+			reg = <0x0 0x20000>;
+			erase-block-size = <4096>;
+			write-block-size = <4>;
+		};
+	};
+
+	sim_ondie: sim-flash-ondie {
+		compatible = "zephyr,sim-flash";
+		erase-value = <0xff>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		status = "okay";
+
+		sim_ondie_array: flash@0 {
+			compatible = "soc-nv-flash";
+			reg = <0x0 0x100000>;
+			erase-block-size = <4096>;
+			write-block-size = <4>;
+		};
+	};
+
+	boot: boot {
+		compatible = "agm,agrv2k-boot";
+		status = "okay";
+
+		store-flash = <&sim_store>;
+		on-die-flash = <&sim_ondie>;
+		on-die-flash-base = <0x80000000>;
+
+		record-offset = <0x000000>;
+		record-size = <0x001000>;
+		store-a-offset = <0x002000>;
+		store-b-offset = <0x00a000>;
+		store-max-size = <0x008000>;
+
+		slot-address = <0x80030000>;
+		slot-size = <0x00010000>;
+
+		bitstream-address = <0x800e7000>;
+		bitstream-size = <0x00019000>;
+	};
+};

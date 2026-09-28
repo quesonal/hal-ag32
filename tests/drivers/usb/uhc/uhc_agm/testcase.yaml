@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.usb.uhc.uhc_agm.native:
+    platform_allow:
+      - native_sim
+    tags:
+      - usb
+      - hal_ag32

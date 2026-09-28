@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Shared Kconfig defaults for all AgRV2K board variants.
+#
+# This file is sourced by each per-board Kconfig.defconfig via rsource.
+# rsource paths are relative to the calling file's directory:
+#
+#   if BOARD_AGM_AGRV2K_<V>
+#   config BOARD
+#       default "agm_agrv2k_<V>"
+#   rsource "../agrv2k/shared/Kconfig.defconfig.body"
+#   endif
+#
+# The per-board guard scopes the body so it only applies when the
+# matching board is selected. The `config BOARD` symbol is per-board
+# (its default value is the full board name), so it lives in the
+# per-board file, not here.
+
+config MAIN_STACK_SIZE
+	default 4096
+
+# Console over PL011 UART0 (CONFIG_UART_AGM, this module's native driver;
+# CONFIG_UART_PL011 cannot be selected on AGM boards — see
+# drivers/serial/Kconfig.agm)
+config CONSOLE
+	default y
+config UART_CONSOLE
+	default y
+config SERIAL
+	default y
+config UART_AGM
+	default y
+
+# GPIO via Stellaris driver (for the board buttons)
+config GPIO
+	default y
+config GPIO_STELLARIS
+	default y
+
+# Pinctrl is required by PL011 (even though the FPGA bakes the mux)
+config PINCTRL
+	default y
+
+# System clock — the upstream MTIP-driven
+# riscv_machine_timer is enabled via the timer0 DT node in
+# dts/riscv/agm/agrv2k.dtsi (it selects TICKLESS_CAPABLE itself and
+# CONFIG_TICKLESS_KERNEL=y follows). reset.S keeps MTIE clear +
+# mtimecmp saturated until the driver init arms a finite deadline at
+# PRE_KERNEL_2, so no early MTIP storm occurs. A polling timer
+# (timer_poll.c + custom cpu_idle) was tried and removed: it only
+# announced from the idle path and froze ticks while any thread ran
+# without sleeping (busy path).

@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: Apache-2.0
+
+config SPI_AGM
+	bool "AGM AgRV2K SPI (phase engine) driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_SPI_ENABLED
+	help
+	  SPI driver for the AgRV2K phase-engine controllers (SPI0/SPI1).
+
+	  The engine runs up to eight TX/RX phases inside one chip-select
+	  window, which suits command/response devices such as SPI flash:
+	  TX first, RX last, never both at once. Transfers longer than 32
+	  bytes stream through PHASE_DATA with the system DMAC (TX fed by it,
+	  RX drained into a bounce buffer); requests outside the engine's
+	  shape (RX-first, CPOL/CPHA other than mode 0, a long TX combined
+	  with an RX, or RX bytes that all fall inside the TX window) are
+	  rejected with -ENOTSUP. RX is counted in the SPI API's slots, so a
+	  caller that lists the command's bytes in its RX buffers (upstream
+	  spi-nor does) gets 0xFF for them and its data at the right offset.
+
+	  The generic SPI API has one line mode for the whole frame, so shapes
+	  such as a flash quad read -- command and address on one line, then the
+	  data on four -- go through the driver's own extensions
+	  (<zephyr/drivers/spi/spi_agm.h>): spi_agm_transceive_phases() for a
+	  caller-defined phase list with per-phase line modes,
+	  spi_agm_poll_status() for the engine's POLL phase and
+	  spi_agm_clock_dummy() for filler clocks.
+
+if SPI_AGM
+
+config SPI_AGM_RX_BOUNCE_BYTES
+	int "RX DMA bounce buffer size"
+	default 512
+	help
+	  The engine moves 32-bit words, and callers such as the spi-nor
+	  flash driver hand over an RX buffer list that is neither contiguous
+	  nor a multiple of four bytes long (their reads are a dummy byte
+	  plus the data). For those transfers the driver DMAs into this
+	  bounce buffer and copies the bytes into the caller's buffers.
+	  Must hold the largest single read the application issues (a spi-nor
+	  page is 256 bytes, plus the driver's dummy byte).
+
+config SPI_AGM_TX_BOUNCE_BYTES
+	int "TX DMA bounce buffer size"
+	default 512
+	help
+	  Mirror of the RX bounce buffer, for the transmit direction: a long
+	  TX whose buffer list is not a single, four-byte-multiple block is
+	  gathered here before the DMAC reads it. The spi-nor flash driver
+	  builds its page program that way (command+address, then the data),
+	  so without this a page-sized write from the flash API cannot use
+	  the engine's TX DMA.
+	  Must hold the largest single write the application issues (a spi-nor
+	  page is 256 bytes, plus the command and address).
+
+endif # SPI_AGM

@@ -1,0 +1,48 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AGM AgRV2K DMA controller. Register map is ARM PL080 /
+  LPC23xx-GPDMA style (8 channels, linked-list items, TC/ERR IRQs).
+
+compatible: "agm,agrv2k-dma"
+
+include: [base.yaml, dma-controller.yaml]
+
+properties:
+  reg:
+    required: true
+  # All three lines are hard-wired in the driver (AGM_DMA_IRQ_CONFIG /
+  # BUILD_ASSERT on DT_INST_NUM_IRQS): intr, inttc, interr. A node without
+  # them is a build error, so require them here rather than let the first
+  # dtc/driver error explain it.
+  interrupts:
+    required: true
+  "#dma-cells":
+    const: 1
+  dma-channels:
+    required: true
+
+  agm,ahb-clkenable-bit:
+    type: int
+    required: true
+    description: |
+      Bit index in SYS.AHB_CLKENABLE (0x03000000 + 0x70) gating DMAC0's AHB
+      clock (bit 0). SoC bring-up opens it, like USB0's.
+    enum: [0]
+
+  agm,ahb-reset-bit:
+    type: int
+    required: true
+    description: |
+      Bit index in SYS.AHB_RESET (0x03000000 + 0x50) holding DMAC0 in reset;
+      write 1 = assert, so bring-up clears it (bit 0).
+    enum: [0]
+
+# Parameter syntax: the single cell is the DMA channel to use on this
+# controller. The peripheral handshake request line is a property of the
+# *client* (SPI0 TX is request 6, SPI0 RX 7, SPI1 TX 8, SPI1 RX 9 -- see the
+# SDK's AltaRiscv.h), because it belongs to the peripheral, not the DMA
+# controller.
+dma-cells:
+  - channel

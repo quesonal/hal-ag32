@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# hal_ag32 is the west *manifest* repository for the AgRV2K workspace.
+#
+#   west init -m <this repo> --mr main <workspace>
+#   cd <workspace> && west update
+#
+# yields:
+#   <workspace>/modules/hal_ag32/         <- this repository (manifest repo)
+#   <workspace>/modules/hal_ag32_samples/  <- the samples companion repo
+#   <workspace>/zephyr/                  <- Zephyr, pinned below
+#   <workspace>/modules/...              <- Zephyr's own projects, imported
+#
+# Why this module is the manifest instead of a project of Zephyr's
+# manifest: every AGM change used to be an in-tree edit (14 driver hooks,
+# 17 driver files, a 2-line UART fix and a west.yml entry), which pinned
+# the whole workspace to a Zephyr revision that existed on exactly one
+# machine. As the manifest repo we pin Zephyr to an upstream SHA and keep
+# the Zephyr tree byte-identical to origin/main.
+
+manifest:
+  self:
+    # Zephyr looks for modules at <workspace>/modules/<name>
+    # (scripts/zephyr_module.py), and hal_<vendor> matches the upstream
+    # HAL naming convention.
+    path: modules/hal_ag32
+
+  projects:
+    # `import: true` pulls in Zephyr's own west.yml; that file carries
+    # `manifest.self.path: zephyr` plus every HAL/library project and the
+    # group-filter, so the list does not have to be copied here (and
+    # stays current as upstream adds projects).
+    #
+    # 403a7d79adbce610cb611912190ba066d7c8903f (pinned).
+    # Nothing in this module is a fork of upstream Zephyr any more —
+    # drivers/serial/uart_agm.c is a native driver against the
+    # publicly documented ARM PrimeCell PL011 register map; the
+    # remaining drivers and the SoC glue link against, but do not
+    # copy, in-tree code. Pin bumps therefore follow the normal
+    # upstream cadence; the last bump was re-verified with a full
+    # twister run on the new SHA.
+    - name: zephyr
+      url: https://github.com/zephyrproject-rtos/zephyr
+      revision: 403a7d79adbce610cb611912190ba066d7c8903f
+      import: true
+
+    # The samples live in a separate repository; this manifest pulls it
+    # in as a west sub-module so `west init -m hal_ag32` is still the
+    # one command that reproduces the whole tree. The samples land at
+    # <workspace>/modules/hal_ag32_samples/ and the canonical build line
+    # becomes:
+    #     west build -b agrv2k_407 \
+    #         modules/hal_ag32_samples/samples/hello_world
+    - name: hal_ag32_samples
+      url: https://github.com/quesonal/hal-ag32-samples
+      revision: main
+      path: modules/hal_ag32_samples

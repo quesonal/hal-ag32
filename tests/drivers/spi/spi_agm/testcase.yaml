@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.spi.spi_agm.logic:
+    platform_allow:
+      - native_sim
+    tags:
+      - spi
+      - hal_ag32
+  # The same binary; the suite names distinguish the two halves so a failure
+  # says which one broke. Kept as a separate scenario so CI reports both.
+  drivers.spi.spi_agm.regs:
+    platform_allow:
+      - native_sim
+    tags:
+      - spi
+      - hal_ag32

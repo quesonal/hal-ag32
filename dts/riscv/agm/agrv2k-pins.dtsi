@@ -1,0 +1,154 @@
+/*
+ * Copyright (c) 2026 AgRV Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * AgRV2K shared FPGA pinout.
+ *
+ * Source of truth for the 67-line shared board.ve pinout that all
+ * 4 board variants (agrv2k_103/303/407/test) consume. Per-board
+ * overlays only override sysclk-frequency / hseclk-frequency (the
+ * 4 boards differ only in PLL multiplier); the pin arrays stay
+ * identical.
+ *
+ * generate_board_ve.py (in hal_ag32/tools/) reads this node out of
+ * the Zephyr-preprocessed dts and emits <board_dir>/board.ve.
+ *
+ * Format reminder (matches SDK AG32 VE配置说明.pdf):
+ *
+ *   Case A — MCU function → pin, no direction:
+ *     <FUNCTION_NAME> PIN_<N>
+ *   Case B — CPLD signal → pin with direction:
+ *     <cpld_signal_name> PIN_<N>:<DIRECTION>
+ *   Case C — MCU function ↔ CPLD signal (no pin, internal cross-bar):
+ *     <FUNCTION_NAME> <cpld_signal_name>
+ *
+ * See samples/slave_spi/ for an overlay that REPLACES the case A pin
+ * list with its own master SPI0/SPI1 rows (a dts overlay overwrites a
+ * whole array property, it does not append) and adds sspi0 / sspi1
+ * signals that don't exist in the default eval-board routing.
+ */
+
+&{/} {
+	agrv2k_pins: agrv2k-pins {
+		compatible = "agm,agrv2k-pins";
+
+		/*
+		 * Clock parameters — every per-board .dts overrides
+		 * these to match its own bitstream (see docs).
+		 */
+		/*
+		 * sysclk-frequency / hseclk-frequency are deliberately NOT
+		 * set here: every board declares them in its own .dts from
+		 * the AGM_SYSCLK_HZ / AGM_HSE_HZ defines at the top of that
+		 * file, so there is exactly one place to edit per board
+		 * (the binding marks both properties required, so a board
+		 * that forgets fails the build instead of silently getting
+		 * someone else's PLL).
+		 *
+		 * Two consumers read them: the bitstream (they become
+		 * board.ve's SYSCLK/HSECLK lines → the fabric PLL) and this
+		 * dts's &clk0 / &cpu0 (peripheral clock and kernel tick).
+		 * tools/generate_board_ve.py errors when they disagree.
+		 */
+
+		/*
+		 * Package (SDK `[setup_logic] logic_device`). The package
+		 * decides which pins exist, so it also decides which
+		 * peripherals can be brought out at all. All four eval
+		 * variants are L100; a board on another package has to prune
+		 * mcu-pins to that device's pin list (`gen_vlog -p -d
+		 * <device>`) and declare it here.
+		 *
+		 * tools/build_bitstream.sh defaults gen_vlog's -d from this
+		 * property and refuses to build a bitstream whose pins the
+		 * device does not have -- gen_vlog itself only warns and
+		 * still exits 0, so the mismatch would otherwise
+		 * be a silent "pin never connected".
+		 */
+		agm,logic-device = "AGRV2KL100";
+
+		/*
+		 * Case A: MCU peripheral → external pin.
+		 * Index N in mcu-functions pairs with index N in
+		 * mcu-pins.
+		 */
+		mcu-functions =
+			/* SPI0 — boot flash peripheral, on every board */
+			"SPI0_HOLDN_IO3",
+			"SPI0_SCK",
+			"SPI0_SI_IO0",
+			"SPI0_WPN_IO2",
+			"SPI0_SO_IO1",
+			"SPI0_CSN",
+
+			/* GPIO4_1..4 → LED1..4 on PIN_51..54 */
+			"GPIO4_1",
+			"GPIO4_2",
+			"GPIO4_3",
+			"GPIO4_4",
+
+			/* GPIO6_2..6 → IO_Button1/2 + IO_Switch1/2 */
+			"GPIO6_2",
+			"GPIO6_4",
+			"GPIO6_5",
+			"GPIO6_6",
+
+			/* GPIO5_5 → MAC0_PHYRSTB — REMOVED, PIN_53 now LED3 */
+			/* "GPIO5_5", */
+
+			/* USB0_ID pin */
+			"USB0_ID",
+
+			/* UART0/1 console */
+			"UART0_UARTRXD",
+			"UART0_UARTTXD",
+			"UART1_UARTTXD",
+			"UART1_UARTRXD",
+
+			/* MAC peripheral removed — pins no longer routed */
+
+			/* CAN0 */
+			"CAN0_TX0",
+			"CAN0_RX0",
+
+			/* I2C0 */
+			"I2C0_SDA",
+			"I2C0_SCL",
+
+			/* GPTIMER1_CH0 — the only GPTIMER OCx the shipped
+			 * bitstream routes (VE: "GPTIMER1_CH0 PIN_7"; see
+			 * samples/gptimer_pwm_pinout). A GPTIMER4_CH0/PIN_15 row
+			 * used to live here, but the dev bitstream does not
+			 * route it at all, so it only made board.ve claim a pin
+			 * that does not exist. */
+			"GPTIMER1_CH0";
+
+		mcu-pins =
+			<97>, <98>, <2>, <3>, <4>, <5>,
+			<51>, <52>, <53>, <54>,
+			<23>, <24>, <29>, <30>,
+			/* <53>, -- PIN_53 now LED3 (was MAC0_PHYRSTB) */
+			<78>,
+			<69>, <68>, <67>, <66>,
+			<39>, <38>,
+			<36>, <35>,
+			<7>;
+
+		/*
+		 * Case B: buttons (input from pin into CPLD/EXTINT).
+		 * GPIO6_2/4 also map to pins but are exposed as
+		 * ti,stellaris-gpio function pins (case A), so they
+		 * don't need a case B entry — GPIO banks aren't user
+		 * CPLD signals. Default GPIO6_2 PIN_23 / GPIO6_4 PIN_24
+		 * are pure case A and live in mcu-pins above.
+		 *
+		 * No default case B in eval board routing — see
+		 * samples/slave_spi/ for a sample that adds its own
+		 * sspi0/sspi1 entries.
+		 */
+
+		/* Case C: no default MCU↔CPLD connections in eval board */
+	};
+};

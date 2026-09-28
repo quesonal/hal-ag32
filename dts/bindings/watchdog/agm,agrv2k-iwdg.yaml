@@ -1,0 +1,71 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AGM AgRV2K IWDG (independent watchdog) — backup-domain 16-bit register at
+  RTC base + 0x34 (vendor SDK framework-agrv_sdk/src/iwdg.h + rtc.h).
+
+  Hardware:
+    * Lives in the RTC / backup domain, NOT the APB bus. No APB clock
+      gate and no PLIC IRQ: the counter reset the SoC when it expires
+      and that is the only reaction.
+    * 8 prescaler taps (/2 /4 /8 /16 /32 /64 /128 /256) over LSI
+      (internal 32 kHz) or LSE (32768 Hz crystal). LSE keeps running
+      in standby; LSI drifts with temperature (~±30 % in datasheet).
+    * Timeout = prescaler × vendor-fixed reload count (no user reload
+      register; "feed" is the write-key 0xa000).
+    * Disable semantics: writing IWDG_ENABLE = 0 stops the counter
+      but leaves the rest of the backup-domain state intact. A
+      subsequent enable re-uses the same prescaler / clock source /
+      freeze configuration. The vendor SDK reaches for a hard reset
+      only via RTC->BDRST (whole backup-domain pulse), which is not
+      exposed through this driver.
+
+  Zephyr WDT API notes:
+    * callback must be NULL (no IRQ path).
+    * window.min must be 0 (no windowed watchdog).
+    * reset_flags must be WDT_FLAG_RESET_SOC (reset-only).
+    * WDT_OPT_PAUSE_HALTED_BY_DBG returns -ENOTSUP (no debug halt
+      clock stop on the backup domain).
+    * WDT_OPT_PAUSE_IN_SLEEP translates to setting IWDG_STOP_FREEZE
+      in the freeze mode.
+
+compatible: "agm,agrv2k-iwdg"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true
+
+  agm,prescaler:
+    type: int
+    required: true
+    enum: [2, 4, 8, 16, 32, 64, 128, 256]
+    description: |
+      Counter prescaler divisor (SDK IWDG_ClkPrescalerTypeDef). The
+      driver picks the closest supported timeout by mapping the
+      requested window.max (ms) to "the smallest prescaler whose
+      timeout is ≥ window.max".
+
+  agm,clk-source:
+    type: string
+    required: true
+    enum: ["lsi", "lse"]
+    description: |
+      Clock source (SDK IWDG_ClkSourceTypeDef). "lse" requires the
+      board to wire a 32768 Hz crystal to the LSE pins; on boards
+      without LSE, an LSE configuration will spin in
+      RTC->BDCR.LSERDY and never arm the IWDG. Prefer "lsi" for
+      board-agnostic bring-up.
+
+  agm,freeze-mode:
+    type: string
+    required: false
+    default: "stop"
+    enum: ["none", "stop", "standby", "all"]
+    description: |
+      Which low-power modes freeze the counter (SDK
+      IWDG_FreezeTypeDef). Default "stop" stops the counter in STOP
+      and lets it run in STANDBY — the recommended setting when the
+      IWDG is meant to wake from standby via reset.

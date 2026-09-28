@@ -1,0 +1,47 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+title: AgRV2K CAN (SJA1000-compatible PeliCAN) controller
+
+description: |
+  On-die CAN controller on AGM AgRV2K SoCs. The IP is register-
+  compatible with the NXP SJA1000 in PeliCAN mode (classic CAN 2.0A
+  and 2.0B; 11-bit and 29-bit identifiers). The 8-bit SJA1000
+  register file is mapped on a 32-bit word stride.
+
+  Supports the MOD_SELFTEST (loopback) and MOD_LISTONLY mode bits.
+
+  The controller is clocked directly from SYSCLK (the bitstream feeds
+  it as the SJA1000 "XTAL1" input), so `clocks` must point at the node
+  carrying the board SYSCLK frequency -- on AgRV2K that is the clk0
+  fixed-clock the boards already override per variant. The driver
+  derives the SJA1000 core clock (f_can / 2) and the minimum supported
+  bit rate from it.
+
+  CAN TX/RX pins (CAN0_TX0 on PIN_39 / CAN0_RX0 on PIN_38 on the
+  shipped agrv2k_407 bitstream) are routed by the FPGA bitstream down to
+  the GPIO bank, but the final step is runtime: pinctrl-0 names a state
+  whose AGM_PINCTRL() cells carry the bank/bit of both pins, and the
+  driver applies it (pinctrl_configure_pins() writes AFSEL + DIR). See
+  the pin controller binding for the cell format.
+
+compatible: "agm,agrv2k-can"
+
+include: [can-controller.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  clocks:
+    required: true
+
+  interrupts:
+    required: true
+
+  agm,apb-clkenable-bit:
+    type: int
+    required: true
+    description: |
+      Bit index in SYS.APB_CLKENABLE (0x03000000 + 0x60) that gates the
+      CAN0 APB clock. 26 on AgRV2K (SDK APB_MASK_CAN0).

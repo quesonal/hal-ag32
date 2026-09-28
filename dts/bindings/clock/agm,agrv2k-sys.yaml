@@ -1,0 +1,51 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AgRV2K SoC system controller (clock + reset + APB gating). Mirrors
+  the AgRV SDK's SYS controller layout (registers at 0x03000000).
+
+  In addition to the syscon register block, this node carries the
+  FLASH ceiling and a reference to the SYSCLK source, both consumed by
+  zephyr/soc/agm/agrv2k/soc.c at PRE_KERNEL_1:
+    clocks (-> clk0)      — SYSCLK after the FCB PLL switch (Hz). Drives
+                            BOARD_PLL_FREQUENCY and the SDK
+                            SCLK_DIV_HIGH/LOW programming. A phandle, not a
+                            copied number: boards set the rate once on the
+                            fixed-clock node, and every consumer (UART, CAN,
+                            timers, PWM, WDT, I2C, this controller) follows.
+    flash-max-frequency   — Maximum clock rate the on-die FLASH controller
+                            can tolerate (Hz). Drives FLASH_MAX_FREQ and
+                            the SAFE divider the soc.c writes at boot.
+
+  Why these live on sys and not on cpu0:
+    * cpu0::clock-frequency is the CPU clock and is also used by the
+      Zephyr kernel timer, which reads it as a plain integer (its Kconfig
+      is derived from /cpus/cpu0), so it cannot be a phandle. The FLASH
+      ceiling is the FLASH IP's electrical limit, not a per-board decision.
+
+compatible: "agm,agrv2k-sys"
+
+include: [syscon.yaml, clock-controller.yaml]
+
+properties:
+  reg:
+    required: true
+
+  clocks:
+    required: true
+    description: |
+      The SYSCLK source (the board's clk0 fixed-clock). soc.c/pm.c read it
+      with DT_PROP_BY_PHANDLE(DT_NODELABEL(sys), clocks, clock_frequency)
+      and use it to program SYS_SCLK_DIV_HIGH/LOW before asserting PLL_RDY,
+      and to re-lock the PLL after a stop-mode wake.
+
+  flash-max-frequency:
+    type: int
+    description: |
+      Maximum FLASH controller clock rate (Hz). Typically BUSCLK from
+      the board.ve line, or the FLASH IP electrical limit if lower.
+      soc.c computes SCLK_DIV = (SYSCLK − 1) / flash-max-frequency.
+
+  "#clock-cells":
+    const: 0

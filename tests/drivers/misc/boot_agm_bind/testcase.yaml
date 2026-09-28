@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  drivers.misc.boot_agm.bind:
+    platform_allow:
+      - native_sim
+    tags:
+      - flash
+      - hal_ag32

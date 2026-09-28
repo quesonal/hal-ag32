@@ -1,0 +1,28 @@
+# AGM AgRV2K on-die flash driver
+#
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config FLASH_AGM
+	bool "AGM AgRV2K on-die flash driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_FLASH_CONTROLLER_ENABLED
+	select FLASH_HAS_DRIVER_ENABLED
+	select FLASH_HAS_PAGE_LAYOUT
+	select FLASH_HAS_EXPLICIT_ERASE
+	help
+	  Program/erase for the AgRV2K on-die flash (1 MB on agrv2k_407) through
+	  the controller at 0x4000_1000. Reading needs no driver -- the array is
+	  XIP-mapped -- but erasing and programming do.
+
+	  Sequences follow the vendor SDK (framework-agrv_sdk/src/flash.c):
+	  unlock with FLASH_KEY1/2, erase one 4 KiB sector at a time via the
+	  address register, program one 32-bit word at a time through the XIP
+	  window with CR.PG set. CR.STRT has to be set after the flash has been
+	  idle for SCLK_DIV_HIGH * 256 cycles, otherwise the start bit is
+	  dropped -- the SDK's FLASH_Start() delay, reproduced here.
+
+	  Note what this driver does *not* touch: the last 100 KiB of the flash
+	  holds the fabric bitstream (AGM_BITSTREAM_ADDR = 0x800e7000) and the
+	  running image occupies the front of the array. Callers own that
+	  layout.

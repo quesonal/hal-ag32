@@ -1,0 +1,58 @@
+# AGM AgRV2K SoC defaults — DT-aware values.
+#
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# RISCV_ABI / RISCV_ISA are NOT Kconfig symbols — the toolchain cmake
+# (cmake/compiler/gcc/target_riscv.cmake) builds them from
+# CONFIG_RISCV_ISA_RV32E, CONFIG_64BIT, CONFIG_RISCV_ISA_EXT_* etc.
+# Don't try to default them here.
+#
+# RISCV_CMODEL_* are choice symbols — defaults have no effect. The
+# default (medlow) is set by arch/riscv/Kconfig when RISCV_GP is not
+# selected. AgRV2K matches that default.
+
+if SOC_AGM_AGRV2K
+
+config SYS_CLOCK_HW_CYCLES_PER_SEC
+	default $(dt_node_int_prop_int,/cpus/cpu@0,clock-frequency)
+
+config NUM_IRQS
+	# Must be > (2ND_LVL_ISR_TBL_OFFSET + max PLIC source ID).
+	# 2ND_LVL_ISR_TBL_OFFSET=32 + PLIC source 44 (max, SDK interrupt.h) = 76.
+	# Round up to 128 for headroom — also matches the level-1 region
+	# (32 slots for RISC-V CPU interrupts 0-15 + spare) plus a clean
+	# power-of-two level-2 region of 96 slots.
+	default 128
+
+config RISCV_ISA_EXT_F
+	default y
+
+config RISCV_ISA_EXT_ZICSR
+	default y
+
+config RISCV_ISA_EXT_ZIFENCEI
+	default y
+
+# PLIC dispatch wiring — PLIC is the level-2 aggregator,
+# attached to the RISC-V CPU intc's MEIP (irq 11). Matches the OpenTitan
+# and Aesc Hydrogen reference defconfigs.
+#
+#   2ND_LVL_ISR_TBL_OFFSET   base slot in _sw_isr_table for level-2 ISRs
+#                            (= number of level-1 IRQs). 32 gives 12
+#                            spare slots if local interrupts grow.
+#   2ND_LVL_INTR_00_OFFSET   level-1 IRQ number PLIC attaches to (MEIP=11)
+#   MAX_IRQ_PER_AGGREGATOR   PLIC sources + some headroom. 64 covers the
+#                            44 SDK IRQs (interrupt.h) with growth room;
+#                            must be < 2^CONFIG_2ND_LEVEL_INTERRUPT_BITS
+#                            (=256 at default 8 bits).
+config 2ND_LVL_ISR_TBL_OFFSET
+	default 32
+
+config 2ND_LVL_INTR_00_OFFSET
+	default 11
+
+config MAX_IRQ_PER_AGGREGATOR
+	default 64
+
+endif # SOC_AGM_AGRV2K

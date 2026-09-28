@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# AGM AgRV2K SoC — single-layer (no SOC_FAMILY / SOC_FAMILY_SERIES).
+# AgRV2K has one SoC; the three-level hierarchy adds noise without
+# value at MVP scope. Mirrors the neorv32 model.
+
+config SOC
+	default "agrv2k" if SOC_AGM_AGRV2K
+
+# AgRV2K: provide our own __reset in soc/agm/agrv2k/reset.S.
+#
+# Without this opt-out, arch/riscv/core/reset.S::__reset jumps to
+# __initialize, which does `csrs mie, MIP_MTIP` unconditionally and
+# triggers the MTIP-preempts-printk trap (every 50 µs during printk
+# → PL011 busy-wait → byte-drop, banner truncation at byte 27).
+#
+# Disabling INCLUDE_RESET_VECTOR drops the arch-level default and lets
+# our soc/agm/agrv2k/reset.S own the boot path. It does the small
+# subset of __initialize's M-mode work actually needed for AgRV2K
+# (FPU init, sp, TLS, mie clear, mret), and mret's straight into
+# Zephyr's shared `s_mode_entry`. mtimecmp is also saturated to
+# 0xFFFFFFFFFFFFFFFF in the preamble so MTIP can never fire even if
+# some future code re-enables mie.MTIE.
+#
+# This is the standard Zephyr pattern — same mechanism as
+# arch/riscv/custom/andes (which sets `n` via zephyr_sources_ifndef
+# and provides its own reset.S) and arch/riscv/custom/thead (which
+# selects=y for the opposite reason). See arch/riscv/Kconfig:128.
+config INCLUDE_RESET_VECTOR
+	default n
+
+# System timer: the upstream riscv_machine_timer driver (MTIP
+# interrupt-driven, tickless) is enabled via the timer0 DT node and
+# provides kernel timekeeping on both the idle and busy paths.
+# reset.S keeps mtimecmp saturated + mie.MTIE clear
+# through boot; the driver arms a finite deadline and enables MTIE at
+# PRE_KERNEL_2, so no early MTIP storm occurs.

@@ -1,0 +1,206 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+title: AgRV2K FPGA pinout (board.ve pin map)
+
+description: |
+  Describes the FPGA bitstream's pin map for an AgRV2K board variant.
+
+  The AgRV2K SoC has a fixed-function peripheral set + an on-die FPGA
+  that implements custom user logic. Both share the same external pins.
+  The FPGA bitstream selects how each pin is wired (MCU peripheral,
+  CPLD signal, or both — cross-bar inside the bitstream) via a text
+  file `board.ve` that the SDK toolchain reads. Zephyr builds the
+  bitstream from this dts node + the SoC/board overlays.
+
+  Three kinds of association live here (all parallel arrays; index N
+  matches across each pair):
+
+  - Case A: MCU function → external pin. Output as
+    `<FUNCTION_NAME> PIN_<N>` (no direction; direction comes from the
+    MCU function itself, e.g. UART TX is always output).
+
+  - Case B: CPLD signal → external pin with direction. Output as
+    `<cpld_signal_name> PIN_<N>:<DIRECTION>` where DIRECTION is one
+    of "output", "input", "inout". Default is "inout" if the array
+    entry is empty.
+
+  - Case C: MCU function ↔ CPLD signal (no external pin — internal
+    cross-bar). Output as `<FUNCTION_NAME> <cpld_signal_name>`. Used
+    when the bitstream needs an MCU peripheral exposed directly to
+    user logic instead of (or in addition to) a pin.
+
+  The frequency properties drive both the SoC clock init (read by
+  soc.c at PRE_KERNEL_1) and the board.ve's `SYSCLK` / `HSECLK`
+  lines.
+
+compatible: "agm,agrv2k-pins"
+
+properties:
+  sysclk-frequency:
+    type: int
+    required: true
+    description: |
+      SYSCLK after the silicon PLL (Hz). Matches the first line of
+      the generated board.ve. Must agree with cpu0::clock-frequency
+      and the bitstream's actual PLL setting.
+
+  hseclk-frequency:
+    type: int
+    required: true
+    description: |
+      HSE crystal frequency on the eval board (Hz). 8 MHz on every
+      AgRV2K board variant as of 2026-09.
+
+  agm,pull-ups:
+    type: array
+    description: |
+      Pins (the same numbers as in mcu-pins / cpld-pins) that should get a
+      weak pull-up. The internal resistors are ~40 kOhm.
+
+      AG32 implements pulls inside the CPLD configuration, not in a runtime
+      register: the vendor documents them as ASF assignments
+      (`set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to PIN_96`,
+      equivalent to `-name CFG_KEEP -to PIN_96 2'b10 -extension`) and
+      changing them at run time means reconfiguring the fabric through the
+      FCB. So they belong to the pin map, next to the pin they apply to, and
+      tools/generate_board_ve.py renders them into board.asf, which ends up
+      in the bitstream.
+
+  agm,pull-downs:
+    type: array
+    description: |
+      Pins that should get a weak pull-down. The vendor document gives one
+      way only -- `set_instance_assignment -name CFG_KEEP -to PIN_96 2'b01
+      -extension` (40 kOhm); there is no WEAK_PULL_DOWN_RESISTOR in the
+      AG32 flow.
+
+  agm,drive-strength-pins:
+    type: array
+    description: |
+      Pins whose output driver should be strengthened, paired with
+      agm,drive-strength-ma (same index). Rendered as
+      `set_instance_assignment -name CURRENT_STRENGTH -to PIN_<n> <N>MA`.
+
+  agm,drive-strength-ma:
+    type: array
+    description: |
+      Drive strength in mA for each pin in agm,drive-strength-pins: 2 mA
+      steps, up to 32 mA (the vendor document's CURRENT_STRENGTH rule).
+
+  agm,logic-device:
+    type: string
+    required: true
+    enum:
+      - "AGRV2KL100"
+      - "AGRV2KL100H"
+      - "AGRV2KL64"
+      - "AGRV2KL64H"
+      - "AGRV2KL48"
+      - "AGRV2KQ32"
+    description: |
+      The package this pin map is for — the SDK's `[setup_logic]
+      logic_device`. The package decides which pins exist, and therefore
+      which peripherals can be brought out at all: an AGRV2KQ32 has 26
+      user IO pins, an AGRV2KL100 has 79 (counted with `gen_vlog -p -d
+      <device>`; the H variants are smaller still: L100H 67,
+      L64H 45).
+
+      tools/build_bitstream.sh takes its gen_vlog `-d` argument from
+      here by default (AGM_LOGIC_DEVICE overrides it) and fails when the
+      pin map names a pin this device does not have. That check is not
+      optional: gen_vlog only warns ("IP pin PIN_x is ignored because no
+      IP macro is specified") and still exits 0, so without it a package
+      mismatch silently produces a bitstream whose pins are never
+      connected.
+
+  mcu-functions:
+    type: string-array
+    description: |
+      Case A: MCU function names (UPPER_SNAKE_CASE as listed in
+      AGRV2K_逻辑设置.pdf). Output one line per entry.
+
+  mcu-pins:
+    type: array
+    description: |
+      Case A: pin numbers paired with mcu-functions (same index).
+  mcu-directions:
+    type: string-array
+    description: |
+      Case A: optional direction per mcu-functions entry (same index,
+      "input"/"output"/"inout"); an empty string leaves the row without a
+      direction, which is the default. The vendor VE uses it for pins the MCU
+      only reads (`SPI0_SI_IO0 PIN_92:INPUT`).
+
+  agm,mcu-input-pins:
+    type: array
+    description: |
+      Case A pins whose row must also carry `:INPUT` -- the pin is read back
+      by the MCU function on it, on top of whatever that function does by
+      default. Equivalent to that row's mcu-directions entry, keyed by pin
+      instead of by index, so it can reach a row anywhere in the list (the
+      index-aligned array would need one empty string per row in between).
+
+      The vendor reference VE spells these rows `SPI0_SI_IO0 PIN_92:INPUT`:
+      SPI0_SI_IO0 is an output function, and the extra INPUT is what puts the
+      flash's IO0 back on SPI0's RX path (dual/quad read). Without it the
+      MCU's GPIO0_0 read path stays tied to zero (`gpio0_io_in[0] = 1'b0`)
+      and every dual/quad read returns noise.
+
+  cpld-signals:
+    type: string-array
+    description: |
+      Case B: CPLD signal names (custom; the user picks). Output as
+      the LHS of the board.ve line, with direction suffix.
+
+  cpld-pins:
+    type: array
+    description: |
+      Case B: pin numbers paired with cpld-signals (same index).
+
+  cpld-directions:
+    type: string-array
+    description: |
+      Case B: direction per cpld-signals entry. One of "input",
+      "output", "inout". Empty string defaults to "inout".
+
+  mcu-cpld-functions:
+    type: string-array
+    description: |
+      Case C: MCU function names that connect directly to a CPLD
+      signal (no pin). Output as `<FUNCTION> <cpld-signal>`.
+
+  mcu-cpld-signals:
+    type: string-array
+    description: |
+      Case C: CPLD signal names paired with mcu-cpld-functions (same index).
+
+  mcu-cpld-directions:
+    type: string-array
+    description: |
+      Case C: optional direction per mcu-cpld-functions entry (same index,
+      "input"/"output"/"inout"); an empty string leaves the row without a
+      direction. The vendor VE spells `SPI0_SI_IO0 si_io0:OUTPUT`.
+
+examples:
+  - |
+    /* Shared by all 4 AgRV2K board variants. Per-board dts files
+     * override sysclk-frequency / hseclk-frequency as needed; pin
+     * arrays stay identical (case A pins are MCU peripherals that
+     * every eval board wires the same way).
+     */
+    agrv2k_pins: agrv2k-pins {
+        compatible = "agm,agrv2k-pins";
+        agm,logic-device = "AGRV2KL100";
+        sysclk-frequency = <200000000>;
+        hseclk-frequency = <8000000>;
+
+        mcu-functions = "UART0_UARTRXD", "UART0_UARTTXD",
+                        "UART1_UARTRXD", "UART1_UARTTXD";
+        mcu-pins      = <69>, <68>,
+                        <66>, <67>;
+
+        cpld-signals    = "led1", "button1";
+        cpld-pins       = <34>,  <23>;
+        cpld-directions = "output", "input";
+    };

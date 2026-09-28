@@ -1,0 +1,15 @@
+# AGM AgRV2K PWM configuration options
+#
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config PWM_AGM_GPTIMER
+	bool "AGM AgRV2K general-purpose timer (GPTIMER0-4) PWM driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_GPTIMER_PWM_ENABLED
+	help
+	  Enable PWM output channels on the AGM AgRV2K STM32-style
+	  general purpose timers (GPTIMER0-4). Each instance exposes
+	  4 PWM channels (CC0-CC3). Reuses the same IP as the counter
+	  driver (agm,agrv2k-gptimer); the two drivers are mutually
+	  exclusive on a given instance.

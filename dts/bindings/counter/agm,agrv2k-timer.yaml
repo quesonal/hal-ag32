@@ -1,0 +1,42 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AGM AgRV2K dual 32-bit timer unit (TIMER0/TIMER1). SP804-style: each
+  unit contains two independent 16/32-bit countdown sub-timers that
+  share one PLIC interrupt. The counter driver exposes the two
+  sub-timers as two alarm channels; the count value is a 32-bit
+  count-up value wrapping every 2^32 ticks (pclk ticks of sub-timer 1).
+
+compatible: "agm,agrv2k-timer"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  clocks:
+    required: true
+    description: |
+      SYSCLK feed for this block. PBUS_DIVIDER resets to 0, so pclk == SYSCLK:
+      reference the board's clk0 fixed-clock instead of copying the number --
+      the driver reads it with DT_INST_PROP_BY_PHANDLE(n, clocks,
+      clock_frequency), exactly like the UART and CAN drivers. A board that
+      changes SYSCLK only edits &clk0.
+  agm,apb-clkenable-bit:
+    type: int
+    required: true
+    description: |
+      Bit index in SYS.APB_CLKENABLE (0x03000000 + 0x60) gating this unit's
+      APB clock: 14 for TIMER0, 15 for TIMER1 (SDK APB_MASK_TIMER0/1).
+      The block is closed at reset and SoC bring-up opens it from here
+      (soc/agm/agrv2k/soc.c) -- the driver no longer derives it from the
+      register address.
+    description: |
+      Frequency (Hz) of the APB/PBUS clock feeding the timer core
+      (the sub-timer count rate). The shipped 407 bitstream runs the timer clock at
+      200 MHz (pclk == SYSCLK).

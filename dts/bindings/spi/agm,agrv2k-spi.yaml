@@ -1,0 +1,85 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AgRV2K SPI controller (0x40012000 SPI0 / 0x40013000 SPI1).
+
+  The IP is a phase engine, not a byte-at-a-time SPI shifter: a transfer
+  is programmed as up to 8 phases (TX / DUMMY_TX / RX / POLL, each single
+  / dual / quad, each with its own byte count) that run back to back
+  inside one chip-select window. That is what makes it a good SPI-flash
+  controller and a poor general-purpose one -- the vendor's own summary
+  lists the constraints:
+
+    1. the first phase must be TX (a transfer cannot start with RX);
+    2. RX and TX are never simultaneous (TX phases, then RX phases);
+    3. RX must be the last phase (nothing clocks after it).
+
+  A device that fits those rules works with this controller alone. A
+  device that does not (full-duplex sensors, RX-first protocols, CPOL or
+  CPHA other than mode 0) needs the FPGA fabric: the vendor patch
+  `full_duplex_spi.v` sits between the SPI signals and the pins and adds
+  a full-duplex RX path plus CPOL/CPHA, controlled through the CPLD
+  window.
+
+compatible: "agm,agrv2k-spi"
+
+include: [spi-controller.yaml, pinctrl-device.yaml]
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  clocks:
+    required: true
+    description: |
+      SCLK parent (clk0 = SYSCLK). The engine divides it by 2..256
+      (SCLK_DIV field, 0 meaning 256), so a request is satisfied by
+      picking the smallest divider that does not exceed the requested
+      frequency.
+
+  agm,apb-clkenable-bit:
+    type: int
+    required: true
+    description: |
+      SYS.APB_CLKENABLE bit for this controller (SPI0 = 2, SPI1 = 3).
+      soc.c opens it at PRE_KERNEL_1.
+
+  dmas:
+    description: |
+      TX and RX DMA channel specifiers, in that order (`dma-names = "tx",
+      "rx"`). The engine streams a transfer longer than four bytes through
+      the phase data register with DMA; the channel is arbitrary but the
+      two must differ.
+
+  dma-names:
+    description: |
+      Must be "tx", "rx" (matches the dmas order).
+
+  agm,tx-dma-request:
+    type: int
+    description: |
+      Peripheral handshake line for the TX direction (SPI0 = 6, SPI1 = 8;
+      SDK AltaRiscv.h SPIx_TX_DMA_REQ). Needed only when `dmas` is present.
+
+  agm,rx-dma-request:
+    type: int
+    description: |
+      Peripheral handshake line for the RX direction (SPI0 = 7, SPI1 = 9;
+      SDK AltaRiscv.h SPIx_RX_DMA_REQ). Needed only when `dmas` is present.
+
+  agm,spi-multiline:
+    type: int
+    required: false
+    default: 0
+    description: |
+      Bitstream-declared multi-line fabric capability:
+        0 = single only (default; matches vendor <build_dir>/zephyr/board.bin)
+        1 = dual SPI capable
+        2 = quad SPI capable
+      Driver rejects SPI_LINES_DUAL/QUAD with -ENOTSUP if the requested
+      line mode exceeds this value. The quad-capable bitstream
+      ~/spi_full_bitstream_97pad/ declares 2 here.

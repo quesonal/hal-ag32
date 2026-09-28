@@ -1,0 +1,197 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AgRV2K bootloader / DFU storage layout.
+
+  The AgRV2K has one on-die 1 MiB flash (0x80000000) and, on the eval
+  boards, one SPI NOR behind the fabric. A bootloader in the low part of
+  the on-die flash uses the NOR as an image store: a boot record in its
+  first sector, an A/B pair of image stores above it, and a staging area
+  for the fabric bitstream. This binding describes that layout, so the
+  driver (drivers/misc/boot_agm.c, CONFIG_BOOT_AGM) can be pointed at
+  another board by changing the node instead of the code.
+
+  The regions:
+
+  * `record-offset`/`record-size`: the boot record sector (magic, mode,
+    per-slot length/CRC/state/attempts, which slot is active) inside
+    `store-flash`.
+  * `store-a-offset`/`store-b-offset`: the two image stores inside
+    `store-flash`, `store-max-size` bytes each (the default layout keeps one
+    sector free in front of them, hence the name).
+  * `slot-address`/`slot-size`: the application slot inside the on-die
+    flash; a store is copied there before it is executed (or the image is
+    programmed there directly, "on-die DFU", in which case nothing is
+    copied).
+  * `bitstream-address`/`bitstream-size`: the *factory* fabric slot -- what
+    the flash option byte points at. The driver never writes it; a bitstream
+    update goes into the slot that is not running and a boot record (whose
+    addresses are the SoC's, see
+    include/zephyr/drivers/misc/agm_bitstream.h) commits it for the next boot.
+
+  Offsets are relative to the flash device they belong to; addresses
+  (`slot-address`, `bitstream-address`) are absolute, so a board whose
+  internal flash is not mapped at 0x80000000 still works.
+
+  There are two families, told apart by whether the images live in the same
+  flash as the execution slot:
+
+  * **on-die A/B** (`store-flash` and `on-die-flash` are the same node, the
+    default): the node gives the *sizes* -- `loader-size` and `app-size` --
+    and the driver derives the rest, so one number moves the whole layout:
+
+      loader-size | record (2 sectors) | side A | side B | slot | staging
+
+    with `bitstream-address` (fixed by the SoC) as the ceiling. The build
+    asserts the result fits, so the offsets do not appear in the node at all
+    (declaring them there is an error).
+  * **two flashes** (`store-flash` is the on-board SPI NOR): the record, the
+    two sides and the bitstream staging live in the NOR, the slot and the
+    fabric reservation in the on-die flash. The two flashes have independent
+    address spaces, so this family spells every offset out.
+
+  Do not add another compatible to the node: one devicetree node can only
+  back one driver (the ordinal-named `__device_dts_ord_<n>` symbol would
+  be defined twice).
+
+  A second, not-yet-implemented layout family ("exec-in-place"): instead
+  of "two stores + one execution slot" the two slots are each the region
+  the image runs from (`slot-a-address` / `slot-b-address`), which drops
+  the copy step and lifts each slot from 60 KiB to about 416 KiB.
+  Only useful if the loader region cannot fit the image (≈ 200 KiB
+  on-die flash, ≥ 200 KiB off die);today's default layout fits,so this
+  is left as a comment in the binding.
+
+compatible: "agm,agrv2k-boot"
+
+include: [base.yaml]
+
+properties:
+  store-flash:
+    type: phandle
+    required: true
+    description: |
+      Flash device that holds the boot record, the A/B image stores and the
+      bitstream staging area. On the eval boards this is the SPI NOR behind
+      the fabric (the default layout); pointing it at the on-die flash as
+      well turns the bootloader into an on-die-only A/B scheme (record,
+      stores, execution slot and staging all inside the 1 MiB internal
+      flash), with the region offsets below simply being on-die offsets.
+
+  on-die-flash:
+    type: phandle
+    required: true
+    description: |
+      Device of the on-die flash that holds the application slot and the
+      bitstream reservation.
+
+  on-die-flash-base:
+    type: int
+    description: |
+      Address the on-die flash is mapped at, i.e. the value subtracted from
+      `slot-address` / `bitstream-address` to get device offsets. Normally
+      taken from the flash node's `reg`; set this when that node does not
+      carry one (a simulated flash, for instance), which also turns off the
+      build-time check that the reservation fits inside the flash.
+
+  record-offset:
+    type: int
+    description: |
+      Offset of the boot record in the flash that holds it. The record spans
+      two `record-size` sectors from there (it is an append log with a spare
+      generation), so
+      `store-a-offset` has to start at or after `record-offset +
+      2 * record-size` -- the driver asserts that at build time.
+
+      Two-flash family only: in the on-die family the record follows the
+      loader's region (`loader-size`).
+
+  loader-size:
+    type: int
+    default: 0x18000
+    description: |
+      On-die family only: how much of the flash below the boot record belongs
+      to the bootloader. The default is 96 KiB, which is what a signed loader
+      needs ~72768 B, plus the trial-boot watchdog the
+      loader arms (604 B of driver) -- and the *loader* is linked against a
+      partition of exactly this size, so a loader that grows past it fails the
+      build instead of running into the record
+      3.26.27).
+
+  app-size:
+    type: int
+    default: 0x32000
+    description: |
+      On-die family only: the largest image each A/B side accepts, which is
+      also the size of the application slot. One number for "how big can my
+      application be"; the default is 200 KiB.
+
+      The whole layout follows from it and `loader-size`:
+
+        loader-size | record | side A | side B | slot | bitstream staging
+
+      and the build asserts that the staging still ends below
+      `bitstream-address` (the SoC's fabric reservation).
+
+  record-size:
+    type: int
+    default: 4096
+    description: |
+      Size of one boot record sector; also the erase granularity the driver
+      uses (both flashes on this SoC erase 4 KiB at a time). The record itself
+      occupies two of these sectors.
+
+  store-a-offset:
+    type: int
+    description: |
+      Offset of image store A in the record's flash. Must clear the record
+      (`record-offset + 2 * record-size`).
+
+      Two-flash family only (see `app-size` for the on-die family).
+
+  store-b-offset:
+    type: int
+    description: Offset of image store B in the external flash.
+
+      Two-flash family only.
+
+  store-max-size:
+    type: int
+    description: |
+      Largest image a store may hold. Must not overlap the store that
+      follows it in the external flash.
+
+      Two-flash family only; the on-die family uses `app-size`.
+
+  slot-address:
+    type: int
+    description: Absolute address of the application slot (where images run).
+
+      Two-flash family only; the on-die family derives it from `loader-size`,
+      `app-size` and the record.
+
+  slot-size:
+    type: int
+    description: Size of the application slot.
+
+      Two-flash family only; the on-die family uses `app-size`.
+
+  bitstream-address:
+    type: int
+    required: true
+    description: Absolute address of the on-die bitstream reservation.
+
+  bitstream-size:
+    type: int
+    required: true
+    description: |
+      Size of the on-die bitstream reservation -- the factory slot, which the
+      flash option byte points at and which this driver never writes.
+
+      Updates go into the two slots the SoC header defines instead
+      (include/zephyr/drivers/misc/agm_bitstream.h): the upload writes the
+      slot that is not running and a boot record commits it, so nothing ever
+      rewrites the region the running fabric came from. There is no staging
+      area and no `BSB1` header any more -- the host's bytes land in the slot
+      exactly as sent.

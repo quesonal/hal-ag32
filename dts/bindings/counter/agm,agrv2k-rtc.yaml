@@ -1,0 +1,58 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AGM AgRV2K RTC @ 0x40000000, exposed as a Zephyr counter device.
+  STM32F1-style 16-bit-halfword RTC in the backup domain: 20-bit
+  prescaler (PRLH/PRLL), 32-bit up counter (CNTH/CNTL, increments
+  every (prescaler + 1) rtc-clock ticks) and a 32-bit alarm
+  (ALRH/ALRL, single channel). PLIC IRQ 2; clock source / frequency
+  are board-level properties (agm,rtc-source / agm,rtc-frequency).
+  The RTC keeps running in stop/standby mode and is the wake source
+  for deep low-power states. See the
+  SDK framework-agrv_sdk/src/rtc.h.
+
+compatible: "agm,agrv2k-rtc"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  agm,rtc-source:
+    type: string
+    required: false
+    default: "lse"
+    enum:
+      - "lse"
+      - "lsi"
+      - "local"
+    description: |
+      RTC clock source written to BDCR RTCSEL (SDK
+      RTC_ClkSourceTypeDef): "lse" = external 32.768 kHz crystal
+      (SDK default via board_rtc_source()), "lsi" = internal RC,
+      "local" = on-die oscillator. LSE requires the LSERDY flag;
+      the other sources start without a ready wait.
+
+  agm,rtc-frequency:
+    type: int
+    required: false
+    default: 32768
+    description: |
+      Frequency (Hz) of the selected RTC clock source. Defaults to
+      the LSE 32768 Hz; must be overridden when agm,rtc-source is
+      "lsi" or "local" and the rate is not 32768.
+
+  agm,prescaler:
+    type: int
+    required: false
+    default: 32767
+    description: |
+      RTC prescaler reload value (PRL). The counter increments every
+      (agm,prescaler + 1) rtc-clock ticks, so the default 32767 with
+      a 32768 Hz source yields a 1 Hz counter (one tick per second).
+      Lower values speed the counter up for fast alarm tests.

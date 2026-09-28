@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+
+tests:
+  soc.agm.fcb_lzw:
+    platform_allow:
+      - native_sim
+    tags:
+      - hal_ag32

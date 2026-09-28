@@ -1,0 +1,64 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Devicetree for the native UART suite.
+ *
+ * The UART node keeps the *real* register address (0x40025000, the on-die
+ * UART0) and the real binding, so what runs here is the production driver
+ * against a window the test maps (src/main.c). The pin controller is the real
+ * agm,agrv2k-pinctrl node with a real AGM_PINCTRL() state, and the suite links
+ * the SoC's own pinctrl_configure_pins(), so the AFSEL/DIR decoding is the
+ * production one rather than a stub.
+ */
+
+#include <zephyr/dt-bindings/pinctrl/agm-agrv2k-pinctrl.h>
+
+/ {
+	/* No interrupt controller exists on native_sim; this one is only DT
+	 * shape (see dts/bindings/interrupt-controller/vnd,fake-intc.yaml),
+	 * because the UART binding requires `interrupts` and the driver's
+	 * interrupt-driven methods (irq_tx_complete among them) are only in the
+	 * API table when the node has one. */
+	fake_intc: interrupt-controller {
+		compatible = "vnd,fake-intc";
+		interrupt-controller;
+		#interrupt-cells = <2>;
+	};
+
+	/* The rate the driver turns into IBRD/FBRD. A plain fixed clock: the
+	 * driver reads clock-frequency off the phandle's node, no clock driver
+	 * is involved. */
+	fake_clk: clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+	};
+
+	/* The real pin controller binding, so the cell decoding under test is
+	 * the production one (soc/agm/agrv2k/pinctrl.c is linked in). */
+	agm_pinctrl: pinctrl {
+		compatible = "agm,agrv2k-pinctrl";
+		status = "okay";
+
+		uart0_default: uart0_default {
+			agm,pins = <AGM_PINCTRL(7, 6, AGM_PINCTRL_OUTPUT)>,
+				   <AGM_PINCTRL(6, 1, AGM_PINCTRL_INPUT)>;
+		};
+	};
+
+	uart_agm0: uart@40025000 {
+		compatible = "agm,agrv2k-uart";
+		reg = <0x40025000 0x1000>;
+		interrupts = <5 1>;
+		/* The driver's IRQ glue iterates interrupt-names (the board dtsi
+		 * spells it "uart"), so the specifier needs a name even with a
+		 * single line. */
+		interrupt-names = "uart";
+		interrupt-parent = <&fake_intc>;
+		clocks = <&fake_clk>;
+		agm,apb-clkenable-bit = <5>;
+		pinctrl-0 = <&uart0_default>;
+		pinctrl-names = "default";
+		current-speed = <115200>;
+		status = "okay";
+	};
+};

@@ -1,0 +1,42 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  AGM AgRV2K general-purpose timer (GPTIMER0-4). STM32-style timer
+  with a free-running up-counter (CNT), auto-reload (ARR), prescaler
+  (PSC) and capture/compare channels. The counter driver exposes one
+  alarm channel (compare channel 0) and a top callback on the counter
+  wrap; the count value is a 32-bit count-up value wrapping every
+  2^32 ticks (pclk ticks).
+
+compatible: "agm,agrv2k-gptimer"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: true
+
+  clocks:
+    required: true
+    description: |
+      SYSCLK feed for this block. PBUS_DIVIDER resets to 0, so pclk == SYSCLK:
+      reference the board's clk0 fixed-clock instead of copying the number --
+      the driver reads it with DT_INST_PROP_BY_PHANDLE(n, clocks,
+      clock_frequency), exactly like the UART and CAN drivers. A board that
+      changes SYSCLK only edits &clk0.
+  agm,apb-clkenable-bit:
+    type: int
+    required: true
+    description: |
+      Bit index in SYS.APB_CLKENABLE (0x03000000 + 0x60) gating this
+      instance's APB clock: 16 for GPTIMER0 through 20 for GPTIMER4 (SDK
+      APB_MASK_GPTIMERx). SoC bring-up opens it from here; the driver no
+      longer derives it from the register address.
+    description: |
+      Frequency (Hz) of the APB/PBUS clock feeding the timer core
+      (the counter count rate). The shipped 407 bitstream runs the timer clock at
+      200 MHz (pclk == SYSCLK).

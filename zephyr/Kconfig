@@ -1,0 +1,111 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# hal_ag32 — Zephyr module Kconfig root.
+#
+# Zephyr 4.4's kconfig.py resolves `source` / `rsource` paths
+# against the directory of the *currently-being-parsed* Kconfig
+# file. So `../soc/agm/agrv2k/Kconfig.soc` from this file
+# (zephyr/Kconfig) lands on hal_ag32/soc/agm/agrv2k/Kconfig.soc.
+# This is the same pattern modules/hal/espressif/zephyr/Kconfig
+# uses (rsource "../components/soc/<chip>/include/soc/Kconfig...").
+#
+# Driver symbols (CONFIG_<X>_AGM) live in this module under
+# drivers/<subsys>/Kconfig.agm, next to the sources they gate (the
+# matching zephyr_library_sources_ifdef() hooks are in
+# drivers/CMakeLists.txt). Nothing about the drivers is in-tree.
+#
+# We own the SoC symbol (SOC_AGM_AGRV2K), the per-board
+# symbols (BOARD_AGM_AGRV2K_<variant>); they live in
+# soc/agm/agrv2k/Kconfig.soc and boards/agm/.../Kconfig.<b>.
+# They also live here: drivers/<subsys>/Kconfig.agm.
+
+menu "hal_ag32 — AgRV2K SoC + boards"
+
+# SoC: single AgRV2K today.
+rsource "../soc/agm/agrv2k/Kconfig.soc"
+
+# Drivers. Each subsystem driver's Kconfig.agm is rsourced inside the
+# *same* conditional the in-tree hook used to sit in (drivers/can/Kconfig had
+# `source "drivers/can/Kconfig.agm"` between `if CAN` .. `endif # CAN`,
+# and so on for counter/dma/i2c/pwm/usb-udc/watchdog/serial).
+#
+# That wrapper is not cosmetic: the driver symbols are `default y` and
+# only depend on DT_HAS_<COMPAT>_ENABLED, so without it they would be y
+# while their subsystem is n -- and their `select` of a symbol inside the
+# subsystem menu (CAN_SJA1000, SERIAL_HAS_DRIVER, ...) then aborts the
+# build with a Kconfig "has direct dependencies CAN with value n, but is
+# currently being y-selected" error. Keeping the conditional keeps the
+# symbols' dependency graph identical to the pre-migration layout.
+if CAN
+rsource "../drivers/can/Kconfig.agm"
+endif
+
+if COUNTER
+rsource "../drivers/counter/Kconfig.agm"
+endif
+
+if CRC_DRIVER
+rsource "../drivers/crc/Kconfig.agm"
+endif
+
+if DMA
+rsource "../drivers/dma/Kconfig.agm"
+endif
+
+# FLASH is a plain `menuconfig` (drivers/flash/Kconfig), not a subsystem gate
+# that our symbol could select, so this follows the upstream layout: the
+# driver's options live inside `if FLASH`.
+if FLASH
+rsource "../drivers/flash/Kconfig.agm"
+endif
+
+if I2C
+rsource "../drivers/i2c/Kconfig.agm"
+endif
+
+if PWM
+rsource "../drivers/pwm/Kconfig.agm"
+endif
+
+if SERIAL
+rsource "../drivers/serial/Kconfig.agm"
+endif
+
+if SPI
+rsource "../drivers/spi/Kconfig.agm"
+endif
+
+if UDC_DRIVER
+rsource "../drivers/usb/udc/Kconfig.agm"
+endif
+
+if UHC_DRIVER
+rsource "../drivers/usb/uhc/Kconfig.agm"
+endif
+
+if WATCHDOG
+rsource "../drivers/watchdog/Kconfig.agm"
+endif
+
+# Drivers that have no Zephyr subsystem menu to gate them: the CPLD
+# window driver (drivers/misc/) selects nothing outside itself, so there
+# is no `if <SUBSYS>` wrapper to preserve.
+rsource "../drivers/misc/Kconfig.agm"
+
+# Ethernet: ETH_AGM is gated by CONFIG_NET_L2_ETHERNET (from
+# drivers/ethernet/Kconfig.agm) but the module's MDIO side
+# (MDIO_AGM) has no subsystem menu -- declare it next to the PHY
+# driver Kconfig so the framework symbols can be configured
+# independently. We rsource both here because the upstream Ethernet
+# subsystem menu (drivers/ethernet/Kconfig) lives in zephyr/ and we
+# can't `select NET_L2_ETHERNET` from outside that tree.
+rsource "../drivers/ethernet/Kconfig.agm"
+rsource "../drivers/ethernet/phy/Kconfig.agm"
+
+# Board defs: 4 variants.
+rsource "../boards/agm/agrv2k_103/Kconfig.agrv2k_103"
+rsource "../boards/agm/agrv2k_303/Kconfig.agrv2k_303"
+rsource "../boards/agm/agrv2k_407/Kconfig.agrv2k_407"
+rsource "../boards/agm/agrv2k_test/Kconfig.agrv2k_test"
+
+endmenu

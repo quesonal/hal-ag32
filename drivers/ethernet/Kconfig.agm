@@ -1,0 +1,70 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Drivers for the AgRV2K on-die MAC0 (0x41040000) + its MDIO
+# controller. Both register as Zephyr devices (NET_DEVICE_DT_INST_DEFINE
+# / DEVICE_DT_INST_DEFINE) and inherit the gate + AFSEL that soc.c
+# opens from DT.
+#
+# Symbols are gated by DT_HAS_<COMPAT>_ENABLED so the build keeps the
+# vendor `default y` flow without pulling in the whole upstream
+# Ethernet subsystem when the binding is absent.
+
+config ETH_AGM
+	bool "AGM AgRV2K MAC0 Ethernet driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_EMAC_ENABLED
+	select NET_L2_ETHERNET
+	help
+	  Enable the AgRV2K on-die MAC0 Ethernet driver
+	  (drivers/ethernet/eth_agm.c). The MAC supports RMII / MII via
+	  CTRL.RMII_MODE. RMII is the default in DT.
+
+if ETH_AGM
+
+config ETH_AGM_INIT_PRIORITY
+	int "AGM Ethernet driver init priority"
+	default 90
+	help
+	  Init priority for the MAC0 Ethernet driver. Higher than the
+	  MDIO bus so PHY is up first; lower than the net stack so
+	  interface is registered before any iface call.
+
+config ETH_AGM_RX_DESCRIPTORS
+	int "AGM Ethernet RX descriptor count"
+	default 4
+	range 2 32
+	help
+	  Number of RX descriptors in the ring. Each descriptor holds
+	  one Ethernet frame; total memory = N * (1518 + 8).
+
+config ETH_AGM_TX_DESCRIPTORS
+	int "AGM Ethernet TX descriptor count"
+	default 4
+	range 2 32
+	help
+	  Number of TX descriptors. TX buffers are reused after each TX
+	  completion IRQ.
+
+endif # ETH_AGM
+
+config MDIO_AGM
+	bool "AGM AgRV2K MAC0 MDIO bus driver"
+	default y
+	depends on DT_HAS_AGM_AGRV2K_MDIO_ENABLED
+	select MDIO
+	help
+	  Enable the AgRV2K MAC0 hardware MDIO bus driver
+	  (drivers/ethernet/mdio/mdio_agm.c). Clause 22 only (the LAN8720
+	  PHY does not need C45; the AgRV2K IP doesn't expose it).
+
+if MDIO_AGM
+
+config MDIO_AGM_INIT_PRIORITY
+	int "AGM MDIO bus init priority"
+	default 80
+	help
+	  Init priority for the MAC0 MDIO controller. POST_KERNEL;
+	  runs after pinctrl_apply_state() opens AFSEL on the pins.
+
+endif # MDIO_AGM

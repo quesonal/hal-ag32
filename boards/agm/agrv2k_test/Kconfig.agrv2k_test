@@ -1,0 +1,13 @@
+# AGM AgRV2K Test board selection.
+#
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config BOARD_AGM_AGRV2K_TEST
+	bool "AGM AgRV2K Test (L100)"
+	select SOC_AGM_AGRV2K
+	help
+	  AGM AgRV2K Test fixture board. RV32IMAFC @ 100 MHz,
+	  256 KB flash, 128 KB SRAM, on-die L100 FPGA fabric.
+	  Pin-compatible with agrv2k_103 but kept as a separate board
+	  for SDK parity (vendor may diverge in the future).

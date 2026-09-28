@@ -1,0 +1,99 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Devicetree for the native boot-driver test: two simulated flashes stand in
+ * for the on-board SPI NOR (record + A/B stores + bitstream staging) and the
+ * on-die flash (application slot + fabric reservation), and the boot node
+ * describes a small layout on top of them.
+ *
+ * The addresses are the real ones (the on-die flash is mapped at 0x80000000
+ * and the application slot sits at 0x80030000, as on the board), so the
+ * driver's address-arithmetic -- slot/bitstream addresses vs device offsets,
+ * and the "is this container linked for the slot I am writing it to" check --
+ * is exercised too. The on-die flash node carries no `reg` (a simulated flash
+ * node does not), which is what `on-die-flash-base` is for.
+ */
+
+/ {
+	/* The console is an emulated UART so the tests can feed the protocol
+	 * servers (AN3155, and whatever else uses the console) byte by byte and
+	 * read their replies, with no pty and no timing games. */
+	chosen {
+		zephyr,console = &emul_uart;
+	};
+
+	/* The trial-watchdog chain . A simulated IWDG node
+	 * makes CONFIG_BOOT_AGM_TRIAL_WATCHDOG selectable here; the test
+	 * overrides the driver's weak hooks, so no register is ever touched. */
+	iwdg0: watchdog@40000034 {
+		compatible = "agm,agrv2k-iwdg";
+		reg = <0x40000034 0x2>;
+		agm,prescaler = <64>;
+		agm,clk-source = "lsi";
+		agm,freeze-mode = "stop";
+		status = "okay";
+	};
+
+	emul_uart: uart-emul {
+		compatible = "zephyr,uart-emul";
+		status = "okay";
+		tx-fifo-size = <1024>;
+		rx-fifo-size = <1024>;
+	};
+
+	sim_store: sim-flash-store {
+		compatible = "zephyr,sim-flash";
+		erase-value = <0xff>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		status = "okay";
+
+		sim_store_array: flash@0 {
+			compatible = "soc-nv-flash";
+			reg = <0x0 0x20000>;
+			erase-block-size = <4096>;
+			write-block-size = <4>;
+		};
+	};
+
+	sim_ondie: sim-flash-ondie {
+		compatible = "zephyr,sim-flash";
+		erase-value = <0xff>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		status = "okay";
+
+		sim_ondie_array: flash@0 {
+			compatible = "soc-nv-flash";
+			reg = <0x0 0x100000>;
+			erase-block-size = <4096>;
+			write-block-size = <4>;
+		};
+	};
+
+	boot: boot {
+		compatible = "agm,agrv2k-boot";
+		status = "okay";
+
+		/* Record + stores + bitstream staging: the "external" flash. */
+		store-flash = <&sim_store>;
+		on-die-flash = <&sim_ondie>;
+		on-die-flash-base = <0x80000000>;
+
+		record-offset = <0x000000>;
+		record-size = <0x001000>;
+		store-a-offset = <0x002000>;
+		store-b-offset = <0x00a000>;
+		store-max-size = <0x008000>;
+
+		slot-address = <0x80030000>;
+		slot-size = <0x00010000>;
+
+		/* The bitstream A/B geometry is the SoC's, not the layout's
+		 * (soc/agm/agrv2k/agm_bitstream.h): slot 1 at 0x800b4000,
+		 * slot 2 at 0x800cd000, the record sector at 0x800e6000 and
+		 * the factory slot at 0x800e7000 -- so the simulated on-die
+		 * flash has to be the real 1 MiB. */
+		bitstream-address = <0x800e7000>;
+		bitstream-size = <0x00019000>;
+	};
+};

@@ -1,0 +1,20 @@
+# Copyright (c) 2026 AgRV Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config UHC_AGM
+	bool "AgRV2K USB0 host controller driver"
+	depends on DT_HAS_AGM_AGRV2K_UHC_ENABLED
+	default y
+	help
+	  Host-mode driver for the AgRV2K on-die USB0 controller
+	  (FSL/ChipIdea-like dual-role silicon driven through its
+	  EHCI-compatible operational registers: USBCMD/USBSTS/PORTSC, the
+	  asynchronous queue-head ring and the periodic frame list).
+
+	  The device-mode counterpart is UDC_AGM on the agm,agrv2k-usb0 node.
+	  USB0 is one piece of silicon with one role at a time, so enable
+	  exactly one of the two devicetree nodes (usb0 / uhc0) per build.
+
+	  Full speed only, no high-speed chirp and no isochronous scheduling;
+	  control, bulk and interrupt transfers, one root port, no external
+	  hubs.

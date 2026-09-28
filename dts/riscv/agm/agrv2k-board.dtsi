@@ -1,0 +1,133 @@
+/*
+ * Copyright (c) 2026 AgRV Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * AgRV2K shared board description.
+ *
+ * Device nodes that are identical on all four AgRV2K board variants
+ * (agrv2k_103 / agrv2k_303 / agrv2k_407 / agrv2k_test). The variants
+ * are one eval board with different PLL and flash-partition settings,
+ * and they all render the same pinout from agrv2k-pins.dtsi
+ * (GPIO4_1..4 -> PIN_51..54, GPIO6_2/4/5/6 -> PIN_23/24/29/30), so
+ * these nodes belong here instead of being copied into one variant's
+ * .dts. A board .dts picks the file up with
+ * `#include <agm/agrv2k-board.dtsi>`.
+ *
+ * Pin mux / pin attributes are still bitstream settings, not runtime
+ * registers.
+ */
+
+/ {
+	aliases {
+		led0 = &led0;
+		led1 = &led1;
+		led2 = &led2;
+		led3 = &led3;
+	};
+
+	/* On-board LEDs -- GPIO4_1..4, active-low sink drivers. The pins
+	 * are IO_ADC_IN15/14/7/6; the bitstream uses them as GPIO. The
+	 * bank must be
+	 * enabled below for the ti,stellaris-gpio driver to own it. */
+	leds {
+		compatible = "gpio-leds";
+		led0: led_1 {
+			gpios = <&gpio4 1 GPIO_ACTIVE_LOW>;
+			label = "LED1";
+		};
+		led1: led_2 {
+			gpios = <&gpio4 2 GPIO_ACTIVE_LOW>;
+			label = "LED2";
+		};
+		led2: led_3 {
+			gpios = <&gpio4 3 GPIO_ACTIVE_LOW>;
+			label = "LED3";
+		};
+		led3: led_4 {
+			gpios = <&gpio4 4 GPIO_ACTIVE_LOW>;
+			label = "LED4";
+		};
+	};
+
+	/* Board buttons/switches -- gpio-keys (input) device on GPIO6.
+	 *
+	 * Pin map (board.ve routing, shared by the 103/303/407/test
+	 * board.ve files):
+	 *   GPIO6_2 -> PIN_23 IO_Button1   (pin IO_WKUP_ADC_IN0_CMP_PA0; idle low, press high)
+	 *   GPIO6_4 -> PIN_24 IO_Button2   (pin IO_ADC_IN1_CMP_PA1)
+	 *   GPIO6_5 -> PIN_29 IO_Switch1   (pin IO_ADC_IN4_CMP_PA4_DAC0)
+	 *   GPIO6_6 -> PIN_30 IO_Switch2   (pin IO_ADC_IN5_CMP_PA5_DAC1)
+	 *
+	 * GPIO6_5/6 (switches) are disabled here: the shipped bitstreams
+	 * route only the buttons, and the switches conflict with DAC0/1
+	 * use -- enable via an overlay only when the board bitstream
+	 * routes them.
+	 *
+	 * polling-mode: AgRV GPIO IE is inverted vs the vanilla stellaris
+	 * IM semantics (write 1 = enable; the gpio_irq sample re-asserts
+	 * it), so interrupt-driven keys
+	 * would need that workaround. Polling sidesteps it entirely.
+	 */
+	keys {
+		compatible = "gpio-keys";
+		polling-mode;
+
+		button1 {
+			label = "IO_Button1";
+			gpios = <&gpio6 2 GPIO_ACTIVE_HIGH>;
+			zephyr,code = <INPUT_KEY_1>;
+		};
+
+		button2 {
+			label = "IO_Button2";
+			gpios = <&gpio6 4 GPIO_ACTIVE_HIGH>;
+			zephyr,code = <INPUT_KEY_2>;
+		};
+
+		sw1 {
+			label = "IO_Switch1";
+			gpios = <&gpio6 5 GPIO_ACTIVE_HIGH>;
+			zephyr,code = <INPUT_KEY_3>;
+			status = "disabled";
+		};
+
+		sw2 {
+			label = "IO_Switch2";
+			gpios = <&gpio6 6 GPIO_ACTIVE_HIGH>;
+			zephyr,code = <INPUT_KEY_4>;
+			status = "disabled";
+		};
+	};
+};
+
+/* Enable GPIO6 (board buttons).
+ *
+ * The Stellaris GPIO binding does NOT support `pinctrl-0` -- the
+ * bitstream (board.ve) is the source of truth for pull-ups. PIN_24 in
+ * particular MUST have a weak pull-up enabled in the bitstream, or
+ * EXT_INT0 / GPIO interrupts will hang (see board.ve comment). Add
+ * `bias-pull-up` to the PIN_24 entry if you switch it to EXT_INT0.
+ */
+&gpio6 {
+	status = "okay";
+};
+
+/* Enable GPIO4 (on-board LEDs). Like GPIO6 the bank uses the
+ * ti,stellaris-gpio driver; LED pins 1..4 are outputs driven through
+ * the gpio-leds node above (pins PIN_51..54). */
+&gpio4 {
+	status = "okay";
+};
+
+/*
+ * Generated pinctrl cells for the pin set this board routes by default
+ * (currently UART0's console pins). Produced by
+ * tools/generate_pinctrl_dtsi.py from agrv2k-pins.dtsi's mcu-functions
+ * list + the SoC AF table (tools/agm_af_pins.yaml); do not hand-edit the
+ * cells. Sample overlays that replace the pin list add their own
+ * fragment (e.g. <agm/pinctrl-devmac.dtsi>) and this one stays as the
+ * board-level baseline.
+ */
+#include <agm/pinctrl-default.dtsi>
